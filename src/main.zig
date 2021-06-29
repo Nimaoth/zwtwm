@@ -6,6 +6,22 @@ var ignoredClassNames: std.StringHashMap(bool) = undefined;
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 var windowStringArena: *std.mem.Allocator = undefined;
 
+var allWindows: std.ArrayList(Window) = undefined;
+
+const Window = struct {
+    const Self = @This();
+
+    hwnd: HWND,
+    className: String,
+    title: String,
+    rect: RECT,
+
+    fn deinit(self: *Self) void {
+        self.className.deinit();
+        self.title.deinit();
+    }
+};
+
 const String = struct {
     value: []const u8,
     allocator: *std.mem.Allocator,
@@ -15,12 +31,26 @@ const String = struct {
     }
 };
 
+const Rect = struct {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+};
+
 fn rgb(r: u8, g: u8, b: u8) u32 {
     return @intCast(u32, r) | (@intCast(u32, g) << 8) | (@intCast(u32, b) << 16);
 }
 
 const HK_CLOSE_WINDOW: i32 = 1;
 const HK_LAYOUT_WINDOWS: i32 = 2;
+const HK_GAP_INC: i32 = 3;
+const HK_GAP_DEC: i32 = 4;
+const HK_SPLIT_INC: i32 = 5;
+const HK_SPLIT_DEC: i32 = 6;
+
+var gap: i32 = 5;
+var splitRatio: f64 = 0.66;
 
 var overlayWindow: HWND = undefined;
 
@@ -33,6 +63,9 @@ pub fn main() anyerror!void {
     var arena = std.heap.ArenaAllocator.init(&gpa.allocator);
     defer arena.deinit();
     windowStringArena = &arena.allocator;
+
+    allWindows = std.ArrayList(Window).init(&gpa.allocator);
+    defer allWindows.deinit();
 
     ignoredClassNames = std.StringHashMap(bool).init(&gpa.allocator);
     defer ignoredClassNames.deinit();
@@ -60,9 +93,7 @@ pub fn main() anyerror!void {
 
     while (false) {
         vtEsc("7"); // store current cursor position
-        if (EnumWindows(HandleEnumWindows, 0) == 0) {
-            return;
-        }
+        updateWindowInfos();
 
         std.time.sleep(std.time.ns_per_ms * 250);
         vtEsc("8"); // restore cursor position
@@ -82,17 +113,72 @@ fn WndProc(
         WM_CREATE => {},
         WM_CLOSE => {},
         WM_DESTROY => PostQuitMessage(0),
+
         WM_HOTKEY => {
             //std.debug.print("Received hotkey. w={}, l={}\n", .{ wParam, lParam });
             switch (wParam) {
                 HK_CLOSE_WINDOW => PostQuitMessage(0),
                 HK_LAYOUT_WINDOWS => {
                     std.log.info("Layout windows", .{});
-                    _ = EnumWindows(HandleEnumWindows, 0);
+                    updateWindowInfos();
+                    layoutWindows() catch unreachable;
+                },
+                HK_GAP_INC => {
+                    gap += 5;
+                    std.log.info("Inc gap: {}", .{gap});
+                    updateWindowInfos();
+                    layoutWindows() catch unreachable;
+                },
+                HK_GAP_DEC => {
+                    gap -= 5;
+                    if (gap < 0) {
+                        gap = 0;
+                    }
+                    std.log.info("Dec gap: {}", .{gap});
+                    updateWindowInfos();
+                    layoutWindows() catch unreachable;
+                },
+                HK_SPLIT_INC => {
+                    splitRatio += 0.025;
+                    if (splitRatio > 0.9) {
+                        splitRatio = 0.9;
+                    }
+                    std.log.info("Inc split: {}", .{splitRatio});
+                    updateWindowInfos();
+                    layoutWindows() catch unreachable;
+                },
+                HK_SPLIT_DEC => {
+                    splitRatio -= 0.025;
+                    if (splitRatio < 0.1) {
+                        splitRatio = 0.1;
+                    }
+                    std.log.info("Dec split: {}", .{splitRatio});
+                    updateWindowInfos();
+                    layoutWindows() catch unreachable;
                 },
 
                 else => std.log.err("Received unknown hotkey {}", .{wParam}),
             }
+        },
+
+        WM_PAINT => {
+            var ps: PAINTSTRUCT = undefined;
+            var hdc = BeginPaint(hwnd, &ps);
+            defer _ = EndPaint(hwnd, &ps);
+
+            var brush = CreateSolidBrush(rgb(200, 50, 25));
+            defer _ = DeleteObject(brush);
+            var backgroundBrush = CreateSolidBrush(0);
+            defer _ = DeleteObject(backgroundBrush);
+
+            const rect = RECT{
+                .left = ps.rcPaint.left + gap,
+                .right = ps.rcPaint.right - gap,
+                .top = ps.rcPaint.top + gap,
+                .bottom = ps.rcPaint.bottom - gap,
+            };
+            _ = FillRect(hdc, &ps.rcPaint, backgroundBrush);
+            _ = FrameRect(hdc, &rect, brush);
         },
         else => return DefWindowProcA(hwnd, msg, wParam, lParam),
     }
@@ -151,8 +237,11 @@ fn createOverlayWindow(hInstance: HINSTANCE) !HWND {
         if (SetLayeredWindowAttributes(
             window,
             0,
-            150,
-            LAYERED_WINDOW_ATTRIBUTES_FLAGS.initFlags(.{ .ALPHA = 1 }),
+            10,
+            LAYERED_WINDOW_ATTRIBUTES_FLAGS.initFlags(.{
+                .ALPHA = 0,
+                .COLORKEY = 1,
+            }),
         ) == 0) {
             return error.FailedToSetWindowOpacity;
         }
@@ -175,11 +264,68 @@ fn createOverlayWindow(hInstance: HINSTANCE) !HWND {
             window,
             HK_LAYOUT_WINDOWS,
             HOT_KEY_MODIFIERS.initFlags(.{
-                .WIN = 1,
+                .CONTROL = 1,
+                .ALT = 1,
+                .SHIFT = 1,
+                .NOREPEAT = 1,
+            }),
+            @intCast(i32, 'R'),
+        ) == 0) {
+            return error.FailedToRegisterHotkey;
+        }
+
+        if (RegisterHotKey(
+            window,
+            HK_GAP_INC,
+            HOT_KEY_MODIFIERS.initFlags(.{
+                .CONTROL = 1,
+                .ALT = 1,
+                .SHIFT = 1,
+                .NOREPEAT = 1,
+            }),
+            @intCast(i32, 'H'),
+        ) == 0) {
+            return error.FailedToRegisterHotkey;
+        }
+
+        if (RegisterHotKey(
+            window,
+            HK_GAP_DEC,
+            HOT_KEY_MODIFIERS.initFlags(.{
+                .CONTROL = 1,
+                .ALT = 1,
+                .SHIFT = 1,
+                .NOREPEAT = 1,
+            }),
+            @intCast(i32, 'F'),
+        ) == 0) {
+            return error.FailedToRegisterHotkey;
+        }
+
+        if (RegisterHotKey(
+            window,
+            HK_SPLIT_DEC,
+            HOT_KEY_MODIFIERS.initFlags(.{
+                .CONTROL = 1,
+                .ALT = 1,
                 .SHIFT = 1,
                 .NOREPEAT = 1,
             }),
             @intCast(i32, 'N'),
+        ) == 0) {
+            return error.FailedToRegisterHotkey;
+        }
+
+        if (RegisterHotKey(
+            window,
+            HK_SPLIT_INC,
+            HOT_KEY_MODIFIERS.initFlags(.{
+                .CONTROL = 1,
+                .ALT = 1,
+                .SHIFT = 1,
+                .NOREPEAT = 1,
+            }),
+            @intCast(i32, 'T'),
         ) == 0) {
             return error.FailedToRegisterHotkey;
         }
@@ -231,13 +377,106 @@ fn getWindowString(hwnd: HWND, comptime func: anytype, comptime lengthFunc: anyt
     }
 }
 
+fn updateWindowInfos() void {
+    for (allWindows.items) |*window| {
+        window.deinit();
+    }
+    allWindows.resize(0) catch unreachable;
+
+    _ = EnumWindows(HandleEnumWindows, 0);
+
+    for (allWindows.items) |*window| {
+        vtCsi("1m");
+        std.debug.print("{s}: ", .{window.className.value});
+        std.debug.print("{s}", .{window.title.value});
+        vtCsi("0m");
+        std.debug.print("   -   {}\n", .{window.rect});
+    }
+}
+
+fn layoutWindows() !void {
+    const monitor = try getMonitorRect();
+
+    var workingArea = Rect{
+        .x = monitor.x + gap,
+        .y = monitor.y + gap,
+        .width = monitor.width - gap * 2,
+        .height = monitor.height - gap * 2,
+    };
+
+    const numWindows: i32 = @intCast(i32, allWindows.items.len);
+    const windowWidth = @divTrunc(workingArea.width - (numWindows - 1) * gap, numWindows);
+    const windowHeight = workingArea.height;
+
+    var hdwp = BeginDeferWindowPos(@intCast(i32, numWindows));
+    if (hdwp == 0) {
+        return error.OutOfMemory;
+    }
+
+    var x: i32 = workingArea.x;
+    for (allWindows.items) |*window, i| {
+        var area = workingArea;
+        if (i + 1 < allWindows.items.len) {
+            // More windows after this one.
+            if (@mod(i, 2) == 0) {
+                const ratio = if (i == 0) splitRatio else 0.5;
+                const split = @floatToInt(i32, @intToFloat(f64, area.width) * ratio);
+
+                workingArea.x += split + gap;
+                workingArea.width -= split + gap;
+                area.width = split;
+            } else {
+                const ratio = if (i == 0) splitRatio else 0.5;
+                const split = @floatToInt(i32, @intToFloat(f64, area.height) * ratio);
+
+                workingArea.y += split + gap;
+                workingArea.height -= split + gap;
+                area.height = split;
+            }
+        }
+
+        std.debug.print("{}, {}, {}, {}\n", .{
+            area.x,
+            area.y,
+            area.width,
+            area.height,
+        });
+
+        hdwp = DeferWindowPos(
+            hdwp,
+            window.hwnd,
+            null,
+            area.x,
+            area.y,
+            area.width,
+            area.height,
+            SET_WINDOW_POS_FLAGS.initFlags(.{
+                .NOOWNERZORDER = 1,
+                .NOZORDER = 1,
+                .SHOWWINDOW = 1,
+            }),
+        );
+
+        if (hdwp == 0) {
+            return error.OutOfMemory;
+        }
+    }
+
+    if (EndDeferWindowPos(hdwp) == 0) {
+        return error.FailedToPositionWindows;
+    }
+}
+
 fn HandleEnumWindows(
     hwnd: HWND,
     param: LPARAM,
 ) callconv(@import("std").os.windows.WINAPI) BOOL {
     const className = getWindowString(hwnd, GetClassNameA, .{}) catch return 1;
-    defer className.deinit();
     if (ignoredClassNames.get(className.value)) |_| {
+        return 1;
+    }
+
+    if (!std.mem.eql(u8, className.value, "CabinetWClass")) {
         return 1;
     }
 
@@ -246,17 +485,18 @@ fn HandleEnumWindows(
     }
 
     const windowTitle = getWindowString(hwnd, GetWindowTextA, GetWindowTextLengthA) catch return 1;
-    defer windowTitle.deinit();
 
     var rect: RECT = undefined;
     if (GetWindowRect(hwnd, &rect) == 0) {
         return 1;
     }
 
-    vtCsi("1m");
-    std.debug.print("{s}", .{windowTitle.value});
-    vtCsi("0m");
-    std.debug.print("   -   {}\n", .{rect});
+    allWindows.append(.{
+        .hwnd = hwnd,
+        .className = className,
+        .title = windowTitle,
+        .rect = rect,
+    }) catch unreachable;
 
     //
     return 1;
@@ -343,4 +583,28 @@ fn vtCsi(arg: anytype) void {
         .ComptimeInt => writer.writeByte(@intCast(u8, arg)) catch {},
         else => writer.writeAll(arg) catch {},
     }
+}
+
+fn getMonitorRect() !Rect {
+    var rect: RECT = undefined;
+    if (SystemParametersInfoA(
+        .GETWORKAREA,
+        0,
+        @ptrCast(*c_void, &rect),
+        SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS.initFlags(.{}),
+    ) == 0) {
+        return error.SystemParametersInfo;
+    }
+    return Rect{
+        .x = rect.left,
+        .y = rect.top,
+        .width = rect.right - rect.left,
+        .height = rect.bottom - rect.top,
+    };
+    //return .{
+    //    .x = 0,
+    //    .y = 0,
+    //    .width = GetSystemMetrics(SM_CXSCREEN),
+    //    .height = GetSystemMetrics(SM_CYSCREEN),
+    //};
 }
