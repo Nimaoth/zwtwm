@@ -13,6 +13,13 @@ pub fn build(b: *std.build.Builder) void {
 
     const exe = b.addExecutable("zwtwm", "src/main.zig");
     exe.addPackage(.{ .name = "zigwin32", .path = "./deps/zigwin32/win32.zig" });
+
+    if (false) {
+        exe.addIncludeDir("./src");
+        exe.addCSourceFile("./src/virtual_desktop_manager.cpp", &.{});
+        exe.linkLibC();
+    }
+
     exe.setTarget(target);
     exe.setBuildMode(mode);
     exe.install();

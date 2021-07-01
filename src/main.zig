@@ -1,6 +1,7 @@
 const std = @import("std");
 
 usingnamespace @import("zigwin32").everything;
+//usingnamespace @import("virtual_desktop_manager.zig");
 
 var ignoredClassNames: std.StringHashMap(bool) = undefined;
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -8,13 +9,15 @@ var windowStringArena: *std.mem.Allocator = undefined;
 
 var allWindows: std.ArrayList(Window) = undefined;
 
+//var vdm: VirtualDesktopManager = undefined;
+
 const Window = struct {
     const Self = @This();
 
     hwnd: HWND,
     className: String,
     title: String,
-    rect: RECT,
+    rect: Rect,
 
     fn deinit(self: *Self) void {
         self.className.deinit();
@@ -32,10 +35,39 @@ const String = struct {
 };
 
 const Rect = struct {
+    const Self = @This();
+
     x: i32,
     y: i32,
     width: i32,
     height: i32,
+
+    pub fn fromRECT(rect: RECT) Self {
+        return Self{
+            .x = rect.left,
+            .y = rect.top,
+            .width = rect.right - rect.left,
+            .height = rect.bottom - rect.top,
+        };
+    }
+
+    pub fn toRECT(self: Self) RECT {
+        return RECT{
+            .left = self.x,
+            .top = self.y,
+            .right = self.x + self.width,
+            .bottom = self.y + self.height,
+        };
+    }
+
+    pub fn expand(self: Self, amount: i32) Self {
+        return Self{
+            .x = self.x - amount,
+            .y = self.y - amount,
+            .width = self.width + amount + amount,
+            .height = self.height + amount + amount,
+        };
+    }
 };
 
 fn rgb(r: u8, g: u8, b: u8) u32 {
@@ -63,6 +95,8 @@ pub fn main() anyerror!void {
     var arena = std.heap.ArenaAllocator.init(&gpa.allocator);
     defer arena.deinit();
     windowStringArena = &arena.allocator;
+
+    //vdm = try VirtualDesktopManager.init();
 
     allWindows = std.ArrayList(Window).init(&gpa.allocator);
     defer allWindows.deinit();
@@ -162,6 +196,8 @@ fn WndProc(
         },
 
         WM_PAINT => {
+            std.log.info("WM_PAINT", .{});
+
             var ps: PAINTSTRUCT = undefined;
             var hdc = BeginPaint(hwnd, &ps);
             defer _ = EndPaint(hwnd, &ps);
@@ -178,7 +214,11 @@ fn WndProc(
                 .bottom = ps.rcPaint.bottom - gap,
             };
             _ = FillRect(hdc, &ps.rcPaint, backgroundBrush);
-            _ = FrameRect(hdc, &rect, brush);
+
+            for (allWindows.items) |*window| {
+                const winRect = window.rect.expand(0).toRECT();
+                _ = FrameRect(hdc, &winRect, brush);
+            }
         },
         else => return DefWindowProcA(hwnd, msg, wParam, lParam),
     }
@@ -435,12 +475,7 @@ fn layoutWindows() !void {
             }
         }
 
-        std.debug.print("{}, {}, {}, {}\n", .{
-            area.x,
-            area.y,
-            area.width,
-            area.height,
-        });
+        window.rect = area;
 
         hdwp = DeferWindowPos(
             hdwp,
@@ -465,6 +500,8 @@ fn layoutWindows() !void {
     if (EndDeferWindowPos(hdwp) == 0) {
         return error.FailedToPositionWindows;
     }
+
+    _ = InvalidateRect(overlayWindow, null, 1);
 }
 
 fn HandleEnumWindows(
@@ -495,7 +532,7 @@ fn HandleEnumWindows(
         .hwnd = hwnd,
         .className = className,
         .title = windowTitle,
-        .rect = rect,
+        .rect = Rect.fromRECT(rect),
     }) catch unreachable;
 
     //
@@ -513,6 +550,15 @@ fn isWindowManageable(hwnd: HWND) bool {
     const pok = (parent != null and isWindowManageable(parent.?));
     const istool = (exstyle & @intCast(i32, @enumToInt(WS_EX_TOOLWINDOW))) != 0;
     const isapp = (exstyle & @intCast(i32, @enumToInt(WS_EX_APPWINDOW))) != 0;
+
+    //var onVirtualDesktop = vdm.IsWindowOnCurrentVirtualDesktop(hwnd) catch true;
+    //if (!onVirtualDesktop) {
+    //    const windowTitle = getWindowString(hwnd, GetWindowTextA, GetWindowTextLengthA) catch return false;
+    //    defer windowTitle.deinit();
+
+    //    std.log.info("Window '{s}' is on another desktop.", .{windowTitle.value});
+    //    return false;
+    //}
 
     if (false) {
         const className = getWindowString(hwnd, GetClassNameA, .{}) catch return false;
