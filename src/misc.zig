@@ -4,10 +4,12 @@ usingnamespace @import("zigwin32").everything;
 
 pub const String = struct {
     value: []const u8,
-    allocator: *std.mem.Allocator,
+    allocator: ?*std.mem.Allocator = null,
 
     pub fn deinit(self: @This()) void {
-        defer self.allocator.free(self.value);
+        if (self.allocator) |allocator| {
+            allocator.free(self.value);
+        }
     }
 };
 
@@ -62,7 +64,7 @@ pub fn getWindowString(hwnd: HWND, comptime func: anytype, comptime lengthFunc: 
         var buffer: []u8 = try allocator.alloc(u8, size);
         const len = @intCast(u64, func(hwnd, @ptrCast([*:0]u8, buffer.ptr), @intCast(i32, buffer.len)));
         if (len == 0) {
-            return error.FailedToGetWindowString;
+            return String{ .value = "" };
         }
 
         if (len >= size - 1) {
