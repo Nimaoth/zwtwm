@@ -12,10 +12,25 @@ var gWindowStringArena: *std.mem.Allocator = undefined;
 
 const CWM_WINDOW_CREATED = WM_USER + 1;
 
+const HotkeyArgs = struct {
+    intParam: i64 = 0,
+    usizeParam: usize = 0,
+    floatParam: f64 = 0.0,
+    boolParam: bool = false,
+    charParam: i27 = 0,
+};
+
 const Hotkey = struct {
     key: u32,
     mods: HOT_KEY_MODIFIERS,
-    func: fn (*WindowManager) void,
+    func: fn (*WindowManager, HotkeyArgs) void,
+    args: HotkeyArgs = .{},
+};
+
+const Command = enum {
+    None,
+    ToggleWindowOnLayer,
+    MoveWindowToLayer,
 };
 
 pub fn main() anyerror!void {
@@ -33,52 +48,73 @@ pub fn main() anyerror!void {
 
     const defaultHotkeys = [_]Hotkey{
         .{
-            .key = @intCast(i32, 'G'),
-            .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .SHIFT = 1, .NOREPEAT = 1 }),
-            .func = WindowManager.layoutWindows,
-        },
-
-        .{
-            .key = @intCast(i32, 'H'),
-            .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .SHIFT = 1, .NOREPEAT = 1 }),
-            .func = WindowManager.increaseGap,
-        },
-        .{
-            .key = @intCast(i32, 'F'),
-            .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .SHIFT = 1, .NOREPEAT = 1 }),
+            .key = @intCast(u32, 'K'),
+            .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
             .func = WindowManager.decreaseGap,
         },
+        .{
+            .key = @intCast(u32, 'Q'),
+            .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
+            .func = WindowManager.increaseGap,
+        },
 
         .{
-            .key = @intCast(i32, 'S'),
-            .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .SHIFT = 1, .NOREPEAT = 1 }),
+            .key = @intCast(u32, 'H'),
+            .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
             .func = WindowManager.decreaseSplit,
         },
         .{
-            .key = @intCast(i32, 'D'),
-            .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .SHIFT = 1, .NOREPEAT = 1 }),
+            .key = @intCast(u32, 'F'),
+            .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
             .func = WindowManager.increaseSplit,
         },
 
         .{
-            .key = @intCast(i32, 'N'),
-            .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .SHIFT = 1, .NOREPEAT = 1 }),
+            .key = @intCast(u32, 'N'),
+            .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
             .func = WindowManager.selectPrevWindow,
         },
         .{
-            .key = @intCast(i32, 'T'),
-            .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .SHIFT = 1, .NOREPEAT = 1 }),
+            .key = @intCast(u32, 'T'),
+            .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
             .func = WindowManager.selectNextWindow,
         },
 
         .{
-            .key = @intCast(i32, 'K'),
-            .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .SHIFT = 1, .NOREPEAT = 1 }),
+            .key = @intCast(u32, 'K'),
+            .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
             .func = WindowManager.moveCurrentWindowToTop,
         },
+        .{
+            .key = @intCast(u32, 'L'),
+            .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
+            .func = WindowManager.moveNextWindowToLayer,
+        },
+        .{
+            .key = @intCast(u32, 'V'),
+            .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
+            .func = WindowManager.toggleNextWindowOnLayer,
+        },
+        .{
+            .key = @intCast(u32, 'X'),
+            .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
+            .func = WindowManager.toggleWindowFullscreen,
+        },
     };
+
     for (defaultHotkeys[0..]) |hotkey| {
         try gWindowManager.registerHotkey(hotkey);
+    }
+
+    var i: u32 = 0;
+    while (i < 9) : (i += 1) {
+        // Switch layer.
+        try gWindowManager.registerHotkey(.{
+            .key = @intCast(u32, '1') + i,
+            .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
+            .func = WindowManager.layerCommand,
+            .args = .{ .usizeParam = @intCast(usize, i) },
+        });
     }
 
     var msg: MSG = undefined;
@@ -209,6 +245,9 @@ const WindowManager = struct {
     currentLayer: usize = 0,
     currentWindow: usize = 0,
 
+    currentCommand: Command = .None,
+    nextCommand: Command = .None,
+
     overlayWindow: HWND,
 
     hHookObjectCreate: HWINEVENTHOOK,
@@ -241,8 +280,10 @@ const WindowManager = struct {
         ) orelse return error.FailedToCreateWinEventHook;
 
         var hHookObjectHide = SetWinEventHook(
-            EVENT_OBJECT_HIDE,
-            EVENT_OBJECT_HIDE,
+            //EVENT_OBJECT_HIDE,
+            //EVENT_OBJECT_HIDE,
+            EVENT_OBJECT_DESTROY,
+            EVENT_OBJECT_DESTROY,
             null,
             WindowManager.handleWindowEventCallback,
             0,
@@ -285,6 +326,13 @@ const WindowManager = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        // Show all windows.
+        for (self.layers.items) |*layer| {
+            for (layer.windows.items) |*window| {
+                _ = ShowWindow(window.hwnd, SW_SHOW);
+            }
+        }
+
         _ = UnhookWinEvent(self.hHookObjectCreate);
         _ = UnhookWinEvent(self.hHookObjectHide);
         _ = UnhookWinEvent(self.hHookObjectFocus);
@@ -335,7 +383,10 @@ const WindowManager = struct {
             return;
         }
 
-        self.hotkeys.items[index].func(self);
+        self.currentCommand = self.nextCommand;
+        self.nextCommand = .None;
+        self.hotkeys.items[index].func(self, self.hotkeys.items[index].args);
+        self.currentCommand = .None;
     }
 
     fn createOverlayWindow() !HWND {
@@ -459,10 +510,13 @@ const WindowManager = struct {
                 self.layoutWindows();
             },
 
-            EVENT_OBJECT_HIDE => {
-                self.removeManagedWindow(hwnd);
-                self.layoutWindows();
-                self.focusCurrentWindow();
+            //EVENT_OBJECT_HIDE => {
+            EVENT_OBJECT_DESTROY => {
+                if (self.isWindowManaged(hwnd)) {
+                    self.removeManagedWindow(hwnd);
+                    self.layoutWindows();
+                    self.focusCurrentWindow();
+                }
             },
 
             EVENT_SYSTEM_FOREGROUND => {
@@ -769,7 +823,7 @@ const WindowManager = struct {
         }
     }
 
-    fn selectPrevWindow(self: *Self) void {
+    fn selectPrevWindow(self: *Self, args: HotkeyArgs) void {
         const layer = self.getCurrentLayer();
         if (layer.windows.items.len == 0) {
             self.currentWindow = 0;
@@ -785,7 +839,7 @@ const WindowManager = struct {
         self.layoutWindows();
     }
 
-    fn selectNextWindow(self: *Self) void {
+    fn selectNextWindow(self: *Self, args: HotkeyArgs) void {
         const layer = self.getCurrentLayer();
         if (layer.windows.items.len == 0) {
             self.currentWindow = 0;
@@ -800,7 +854,7 @@ const WindowManager = struct {
         self.layoutWindows();
     }
 
-    fn moveCurrentWindowToTop(self: *Self) void {
+    fn moveCurrentWindowToTop(self: *Self, args: HotkeyArgs) void {
         std.log.info("moveCurrentWindowToTop", .{});
         const layer = self.getCurrentLayer();
         layer.moveWindowToTop(self.currentWindow);
@@ -897,42 +951,158 @@ const WindowManager = struct {
         }
 
         self.rerenderOverlay();
+
+        for (self.layers.items) |*l, i| {
+            if (l.isEmpty()) continue;
+
+            std.debug.print("  Layer {}\n", .{i});
+            for (l.windows.items) |*window| {
+                std.debug.print("    {s}: ", .{window.className.value});
+                std.debug.print("{s}", .{window.title.value});
+                std.debug.print("   -   {}\n", .{window.rect});
+            }
+        }
     }
 
-    fn increaseGap(self: *Self) void {
+    fn setWindowVisibility(self: *Self, hwnd: HWND, shouldBeVisible: bool) void {
+        const isMinimized = IsIconic(hwnd) != 0;
+        const isVisible = IsWindowVisible(hwnd) != 0;
+
+        if (shouldBeVisible and !isMinimized and isVisible) {
+            // Already visible, nothing to do.
+            std.log.debug("Window {} is already visible.", .{hwnd});
+            return;
+        }
+
+        if (!shouldBeVisible and !isVisible) {
+            // Already hidden, nothing to do.
+            std.log.debug("Window {} is already hidden.", .{hwnd});
+            return;
+        }
+
+        // Temp: only minimize window, later we actually want to hide them.
+        if (shouldBeVisible) {
+            _ = ShowWindow(hwnd, SW_RESTORE);
+        } else {
+            _ = ShowWindow(hwnd, SW_HIDE);
+        }
+    }
+
+    fn updateWindowVisibility(self: *Self, hwnd: HWND) void {
+        self.setWindowVisibility(hwnd, self.getCurrentLayer().containsWindow(hwnd));
+    }
+
+    fn increaseGap(self: *Self, args: HotkeyArgs) void {
         self.gap += 5;
         std.log.info("Inc gap: {}", .{self.gap});
-        self.updateWindowInfos();
         self.layoutWindows();
     }
 
-    fn decreaseGap(self: *Self) void {
+    fn decreaseGap(self: *Self, args: HotkeyArgs) void {
         self.gap -= 5;
         if (self.gap < 0) {
             self.gap = 0;
         }
         std.log.info("Dec gap: {}", .{self.gap});
-        self.updateWindowInfos();
         self.layoutWindows();
     }
 
-    fn increaseSplit(self: *Self) void {
+    fn increaseSplit(self: *Self, args: HotkeyArgs) void {
         self.splitRatio += 0.025;
         if (self.splitRatio > 0.9) {
             self.splitRatio = 0.9;
         }
         std.log.info("Inc split: {}", .{self.splitRatio});
-        self.updateWindowInfos();
         self.layoutWindows();
     }
 
-    fn decreaseSplit(self: *Self) void {
+    fn decreaseSplit(self: *Self, args: HotkeyArgs) void {
         self.splitRatio -= 0.025;
         if (self.splitRatio < 0.1) {
             self.splitRatio = 0.1;
         }
         std.log.info("Dec split: {}", .{self.splitRatio});
-        self.updateWindowInfos();
         self.layoutWindows();
+    }
+
+    fn moveCurrentWindowToLayer(self: *Self, args: HotkeyArgs) void {
+        std.log.info("Move current window to layer: {}", .{args.usizeParam});
+        const newLayer = args.usizeParam;
+        if (newLayer == self.currentLayer) return;
+
+        if (newLayer < 0 or newLayer >= self.layers.items.len) {
+            std.log.err("Can't move window to layer {}: outside of range", .{args.usizeParam});
+            return;
+        }
+
+        var fromLayer = self.getCurrentLayer();
+        var toLayer = self.getLayer(@intCast(usize, newLayer));
+
+        if (fromLayer.getWindowAt(self.currentWindow)) |window| {
+            toLayer.addWindow(window.hwnd) catch unreachable;
+            _ = fromLayer.removeWindow(window.hwnd);
+            self.setWindowVisibility(window.hwnd, false);
+        }
+
+        self.layoutWindows();
+        self.clampCurrentWindowIndex();
+        self.focusCurrentWindow();
+        self.layoutWindows();
+    }
+
+    fn switchLayer(self: *Self, args: HotkeyArgs) void {
+        std.log.info("Switch to layer: {}", .{args.usizeParam});
+        const newLayer = args.usizeParam;
+        if (newLayer == self.currentLayer) return;
+
+        if (newLayer < 0 or newLayer >= self.layers.items.len) {
+            std.log.err("Can't switch to layer {}: outside of range", .{args.usizeParam});
+            return;
+        }
+
+        var fromLayer = self.getCurrentLayer();
+        var toLayer = self.getLayer(@intCast(usize, newLayer));
+
+        // Hide windows in the current layer except ones that are also on the target layer.
+        for (fromLayer.windows.items) |*window| {
+            if (!toLayer.containsWindow(window.hwnd)) {
+                self.setWindowVisibility(window.hwnd, false);
+            }
+        }
+
+        for (toLayer.windows.items) |*window| {
+            // This doesn't do anything if the window is already visible.
+            self.setWindowVisibility(window.hwnd, true);
+        }
+
+        self.currentLayer = args.usizeParam;
+        self.currentWindow = 0;
+        self.focusCurrentWindow();
+        self.layoutWindows();
+    }
+
+    fn layerCommand(self: *Self, args: HotkeyArgs) void {
+        std.log.info("Layer command", .{});
+        switch (self.currentCommand) {
+            .None => self.switchLayer(args),
+            .ToggleWindowOnLayer => std.log.err("Toggle window on layer not implemented yet.", .{}),
+            .MoveWindowToLayer => self.moveCurrentWindowToLayer(args),
+            //else => unreachable,
+        }
+    }
+
+    fn moveNextWindowToLayer(self: *Self, args: HotkeyArgs) void {
+        std.log.info("Move next window to layer", .{});
+        self.nextCommand = .MoveWindowToLayer;
+    }
+
+    fn toggleNextWindowOnLayer(self: *Self, args: HotkeyArgs) void {
+        std.log.info("Toggle next window on layer", .{});
+        self.nextCommand = .ToggleWindowOnLayer;
+    }
+
+    fn toggleWindowFullscreen(self: *Self, args: HotkeyArgs) void {
+        std.log.info("Toggle current windw fullscreen", .{});
+        // @todo
     }
 };
