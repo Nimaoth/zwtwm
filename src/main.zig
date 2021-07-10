@@ -6,6 +6,7 @@ usingnamespace @import("window_manager.zig");
 usingnamespace @import("layer.zig");
 
 pub const LOG_LAYERS = true;
+pub const ONLY_USE_HALF_MONITOR = false;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 pub var gWindowManager: WindowManager = undefined;
@@ -62,14 +63,14 @@ pub fn log(
     args: anytype,
 ) void {
     const level_txt = switch (message_level) {
-        .emerg => "emergency",
-        .alert => "alert",
-        .crit => "critical",
-        .err => "error",
-        .warn => "warning",
-        .notice => "notice",
+        .emerg => "emrg",
+        .alert => "alrt",
+        .crit => "crit",
+        .err => "errr",
+        .warn => "warn",
+        .notice => "notc",
         .info => "info",
-        .debug => "debug",
+        .debug => "debg",
     };
     const color = switch (message_level) {
         .emerg => "41m",

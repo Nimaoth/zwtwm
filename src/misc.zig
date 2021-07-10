@@ -95,3 +95,47 @@ pub fn getMonitorRect() !Rect {
         .height = rect.bottom - rect.top,
     };
 }
+
+pub fn isWindowMaximized(hwnd: HWND) !bool {
+    var placement: WINDOWPLACEMENT = undefined;
+    placement.length = @sizeOf(WINDOWPLACEMENT);
+    if (GetWindowPlacement(hwnd, &placement) == 0) {
+        return error.FailedToGetWindowPlacement;
+    }
+    return placement.showCmd == .MAXIMIZE;
+}
+
+pub fn getRectWithoutBorder(hwnd: HWND, rect: Rect) Rect {
+    const border = getBorderThickness(hwnd) catch return rect;
+    const newRect = Rect{
+        .x = rect.x - border.left,
+        .y = rect.y - border.top,
+        .width = rect.width + border.left + border.right,
+        .height = rect.height + border.top + border.bottom,
+    };
+    //std.log.debug("\nrect: {}\nbord: {}\n new: {}", .{ rect, border, newRect });
+    return newRect;
+}
+
+pub fn getBorderThickness(hwnd: HWND) !RECT {
+    var rect: RECT = undefined;
+    var frame: RECT = undefined;
+    if (GetWindowRect(hwnd, &rect) == 0) {
+        return error.FailedToGetWindowRect;
+    }
+    if (DwmGetWindowAttribute(
+        hwnd,
+        @enumToInt(DWMWA_EXTENDED_FRAME_BOUNDS),
+        &frame,
+        @intCast(u32, @sizeOf(RECT)),
+    ) != 0) {
+        return error.FailedToGetWindowAttribute;
+    }
+
+    return RECT{
+        .left = frame.left - rect.left,
+        .top = frame.top - rect.top,
+        .right = rect.right - frame.right,
+        .bottom = rect.bottom - frame.bottom,
+    };
+}

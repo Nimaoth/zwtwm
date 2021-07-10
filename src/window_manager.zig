@@ -213,6 +213,12 @@ pub const WindowManager = struct {
                 .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
                 .func = WindowManager.toggleWindowFullscreen,
             },
+
+            .{
+                .key = @intCast(u32, 'G'),
+                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .SHIFT = 1, .NOREPEAT = 1 }),
+                .func = WindowManager.printForegroundWindowInfo,
+            },
         };
 
         for (defaultHotkeys[0..]) |hotkey| {
@@ -393,7 +399,7 @@ pub const WindowManager = struct {
                 if (self.isWindowManaged(hwnd)) {
                     self.setCurrentWindow(hwnd);
                 }
-                self.rerenderOverlay();
+                self.layoutWindows();
             },
 
             EVENT_SYSTEM_MOVESIZESTART => {
@@ -760,8 +766,11 @@ pub const WindowManager = struct {
         std.log.notice("Layout windows", .{});
 
         var monitor = getMonitorRect() catch return;
-        monitor.width = @divTrunc(monitor.width, 2) - 1;
-        monitor.x += monitor.width + 2;
+
+        if (root.ONLY_USE_HALF_MONITOR) {
+            monitor.width = @divTrunc(monitor.width, 2) - 1;
+            monitor.x += monitor.width + 2;
+        }
 
         var workingArea = Rect{
             .x = monitor.x + self.gap,
@@ -775,18 +784,26 @@ pub const WindowManager = struct {
         const numWindows: i32 = @intCast(i32, layer.windows.items.len);
         if (numWindows > 0) {
             if (layer.fullscreen) {
-                const win = layer.getWindowAt(self.currentWindow).?;
-                win.rect = workingArea;
+                const window = layer.getWindowAt(self.currentWindow).?;
+
+                if (isWindowMaximized(window.hwnd) catch false) {
+                    std.log.debug("Restoring window because it is maximized: {}", .{window.hwnd});
+                    _ = ShowWindow(window.hwnd, SW_RESTORE);
+                }
+
+                window.rect = workingArea;
+
+                const visualRect = getRectWithoutBorder(window.hwnd, window.rect);
                 if (SetWindowPos(
-                    win.hwnd,
+                    window.hwnd,
                     null,
-                    workingArea.x - 7,
-                    workingArea.y,
-                    workingArea.width + 14,
-                    workingArea.height + 7,
+                    visualRect.x,
+                    visualRect.y,
+                    visualRect.width,
+                    visualRect.height,
                     SET_WINDOW_POS_FLAGS.initFlags(.{}),
                 ) == 0) {
-                    std.log.err("Failed to set window position of {}", .{win.hwnd});
+                    std.log.err("Failed to set window position of {}", .{window.hwnd});
                 }
             } else {
                 var hdwp = BeginDeferWindowPos(@intCast(i32, numWindows));
@@ -796,10 +813,16 @@ pub const WindowManager = struct {
 
                 var x: i32 = workingArea.x;
                 for (layer.windows.items) |*window, i| {
+                    if (isWindowMaximized(window.hwnd) catch false) {
+                        std.log.debug("Restoring window because it is maximized: {}", .{window.hwnd});
+                        _ = ShowWindow(window.hwnd, SW_RESTORE);
+                    }
+
                     var area = workingArea;
                     if (i + 1 < layer.windows.items.len) {
                         // More windows after this one.
-                        if (@mod(i, 2) != 0) {
+                        const horizontalOrVertical = if (root.ONLY_USE_HALF_MONITOR) 1 else 0;
+                        if (@mod(i, 2) == horizontalOrVertical) {
                             const ratio = if (i == 0) self.splitRatio else 0.5;
                             const split = @floatToInt(i32, @intToFloat(f64, area.width) * ratio);
 
@@ -818,17 +841,17 @@ pub const WindowManager = struct {
 
                     window.rect = area;
 
+                    const visualRect = getRectWithoutBorder(window.hwnd, window.rect);
                     hdwp = DeferWindowPos(
                         hdwp,
                         window.hwnd,
                         null,
-                        area.x - 7,
-                        area.y,
-                        area.width + 14,
-                        area.height + 7,
+                        visualRect.x,
+                        visualRect.y,
+                        visualRect.width,
+                        visualRect.height,
                         SET_WINDOW_POS_FLAGS.initFlags(.{
                             .NOOWNERZORDER = 1,
-                            .NOZORDER = 0,
                             .SHOWWINDOW = 1,
                         }),
                     );
@@ -839,6 +862,10 @@ pub const WindowManager = struct {
                 }
 
                 _ = EndDeferWindowPos(hdwp);
+            }
+
+            for (layer.windows.items) |*window| {
+                _ = InvalidateRect(window.hwnd, null, 1);
             }
         }
 
@@ -938,7 +965,6 @@ pub const WindowManager = struct {
             self.setWindowVisibility(window.hwnd, false);
         }
 
-        self.layoutWindows();
         self.clampCurrentWindowIndex();
         self.focusCurrentWindow();
         self.layoutWindows();
@@ -1027,10 +1053,23 @@ pub const WindowManager = struct {
         const hwnd = GetForegroundWindow();
         if (self.isWindowManaged(hwnd)) {
             self.removeManagedWindow(hwnd);
-        } else {
+            self.layoutWindows();
+        } else
+        //if (self.isWindowManageable(hwnd))
+        {
             self.manageWindow(hwnd, true) catch {};
+            self.layoutWindows();
         }
+    }
 
-        self.layoutWindows();
+    fn printForegroundWindowInfo(self: *Self, args: HotkeyArgs) void {
+        const hwnd = GetForegroundWindow();
+        var className = getWindowString(hwnd, GetClassNameA, .{}, root.gWindowStringArena) catch return;
+        defer className.deinit();
+
+        var title = getWindowString(hwnd, GetWindowTextA, GetWindowTextLengthA, root.gWindowStringArena) catch return;
+        defer title.deinit();
+
+        std.log.notice("{s} ({}): '{s}'", .{ className.value, self.isWindowManageable(hwnd), title.value });
     }
 };
