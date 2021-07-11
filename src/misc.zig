@@ -2,6 +2,8 @@ const std = @import("std");
 
 usingnamespace @import("zigwin32").everything;
 
+pub const WINDOW_PER_MONITOR = true;
+
 pub const String = struct {
     value: []const u8,
     allocator: ?*std.mem.Allocator = null,
@@ -138,4 +140,55 @@ pub fn getBorderThickness(hwnd: HWND) !RECT {
         .right = rect.right - frame.right,
         .bottom = rect.bottom - frame.bottom,
     };
+}
+
+pub fn setWindowVisibility(hwnd: HWND, shouldBeVisible: bool) void {
+    const isMinimized = IsIconic(hwnd) != 0;
+    const isVisible = IsWindowVisible(hwnd) != 0;
+
+    if (shouldBeVisible and !isMinimized and isVisible) {
+        // Already visible, nothing to do.
+        //std.log.debug("Window {} is already visible.", .{hwnd});
+        return;
+    }
+
+    if (!shouldBeVisible and !isVisible) {
+        // Already hidden, nothing to do.
+        //std.log.debug("Window {} is already hidden.", .{hwnd});
+        return;
+    }
+
+    if (shouldBeVisible) {
+        _ = ShowWindow(hwnd, SW_RESTORE);
+    } else {
+        _ = ShowWindow(hwnd, SW_HIDE);
+    }
+}
+
+pub fn screenToClient(hwnd: HWND, rect: RECT) RECT {
+    if (true) {
+        var overlayRect: RECT = undefined;
+        _ = GetWindowRect(hwnd, &overlayRect);
+
+        return RECT{
+            .left = rect.left - overlayRect.left,
+            .right = rect.right - overlayRect.left,
+            .top = rect.top - overlayRect.top,
+            .bottom = rect.bottom - overlayRect.top,
+        };
+    } else {
+        var result = rect;
+
+        var temp = POINT{ .x = rect.left, .y = rect.top };
+        std.debug.assert(ScreenToClient(hwnd, &temp) != 0);
+        result.left = temp.x;
+        result.top = temp.y;
+
+        temp = POINT{ .x = rect.right, .y = rect.bottom };
+        std.debug.assert(ScreenToClient(hwnd, &temp) != 0);
+        result.right = temp.x;
+        result.bottom = temp.y;
+
+        return rect;
+    }
 }

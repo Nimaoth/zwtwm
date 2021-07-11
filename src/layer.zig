@@ -4,6 +4,21 @@ const root = @import("root");
 usingnamespace @import("zigwin32").everything;
 usingnamespace @import("misc.zig");
 
+pub const Options = struct {
+    const Self = @This();
+
+    gap: ?i32 = null,
+    splitRatio: ?f64 = null,
+
+    pub fn getGap(self: Self, fallback: Options) i32 {
+        return self.gap orelse (fallback.gap orelse 5);
+    }
+
+    pub fn getSplitRatio(self: Self, fallback: Options) f64 {
+        return self.splitRatio orelse (fallback.splitRatio orelse 0.66);
+    }
+};
+
 pub const Window = struct {
     const Self = @This();
 
@@ -23,6 +38,7 @@ pub const Layer = struct {
 
     windows: std.ArrayList(Window),
     fullscreen: bool = false,
+    options: Options = .{},
 
     pub fn init(allocator: *std.mem.Allocator) !Self {
         return Self{

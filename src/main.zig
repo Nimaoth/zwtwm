@@ -39,8 +39,12 @@ pub fn main() anyerror!void {
 
     var msg: MSG = undefined;
     while (GetMessageA(&msg, null, 0, 0) > 0) {
-        _ = TranslateMessage(&msg);
-        _ = DispatchMessageA(&msg);
+        if (msg.message == WM_HOTKEY) {
+            gWindowManager.handleHotkey(msg.wParam);
+        } else {
+            _ = TranslateMessage(&msg);
+            _ = DispatchMessageA(&msg);
+        }
     }
 }
 
@@ -48,9 +52,11 @@ fn ConsoleCtrlHandler(CtrlType: u32) callconv(@import("std").os.windows.WINAPI) 
     std.log.debug("ConsoleCtrlHandler: {}", .{CtrlType});
     // @todo: handle thread synchronization.
     std.log.info("Make all managed windows visible again.", .{});
-    for (gWindowManager.layers.items) |*layer| {
-        for (layer.windows.items) |*window| {
-            _ = ShowWindow(window.hwnd, SW_SHOW);
+    for (gWindowManager.monitors.items) |*monitor| {
+        for (monitor.layers.items) |*layer| {
+            for (layer.windows.items) |*window| {
+                _ = ShowWindow(window.hwnd, SW_SHOW);
+            }
         }
     }
     return 0;

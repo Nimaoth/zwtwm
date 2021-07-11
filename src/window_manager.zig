@@ -4,17 +4,10 @@ const root = @import("root");
 usingnamespace @import("zigwin32").everything;
 usingnamespace @import("misc.zig");
 usingnamespace @import("layer.zig");
+usingnamespace @import("monitor.zig");
 
 const CWM_WINDOW_CREATED = WM_USER + 1;
 const HK_CLOSE_WINDOW: i32 = 42069;
-
-const HotkeyArgs = struct {
-    intParam: i64 = 0,
-    usizeParam: usize = 0,
-    floatParam: f64 = 0.0,
-    boolParam: bool = false,
-    charParam: i27 = 0,
-};
 
 const Hotkey = struct {
     key: u32,
@@ -34,34 +27,51 @@ pub const WindowManager = struct {
 
     allocator: *std.mem.Allocator,
 
-    hotkeys: std.ArrayList(Hotkey),
-    layers: std.ArrayList(Layer),
-    currentLayer: usize = 0,
-    currentWindow: usize = 0,
+    monitors: std.ArrayList(Monitor),
+    currentMonitor: usize = 0,
 
+    hotkeys: std.ArrayList(Hotkey),
     currentCommand: Command = .None,
     nextCommand: Command = .None,
-
-    overlayWindow: HWND,
 
     hHookObjectCreate: HWINEVENTHOOK,
     hHookObjectHide: HWINEVENTHOOK,
     hHookObjectFocus: HWINEVENTHOOK,
     hHookObjectMoved: HWINEVENTHOOK,
 
+    virtualArea: RECT,
+    overlayWindow: HWND,
+
     // Settings
     ignoredClassNames: std.StringHashMap(bool),
-    gap: i32 = 5,
-    splitRatio: f64 = 0.5,
+    options: Options = .{
+        .gap = 5,
+        .splitRatio = 0.5,
+    },
 
     pub fn init(allocator: *std.mem.Allocator) !Self {
-        const overlayWindow = try createOverlayWindow();
-        std.log.info("Created overlay window: {}", .{overlayWindow});
-        var layers = try std.ArrayList(Layer).initCapacity(allocator, 10);
-        var i: usize = 0;
-        while (i < 10) : (i += 1) {
-            try layers.append(try Layer.init(allocator));
+        const hInstance = GetModuleHandleA(null);
+        const winClass = WNDCLASSEXA{
+            .cbSize = @intCast(u32, @sizeOf(WNDCLASSEXA)),
+            .style = WNDCLASS_STYLES.initFlags(.{}),
+            .lpfnWndProc = Self.WndProc,
+            .cbClsExtra = 0,
+            .cbWndExtra = 0,
+            .hInstance = hInstance,
+            .hIcon = null,
+            .hCursor = null,
+            .hbrBackground = null,
+            .lpszMenuName = null,
+            .lpszClassName = WINDOW_NAME,
+            .hIconSm = null,
+        };
+
+        if (RegisterClassExA(&winClass) == 0) {
+            return error.FailedToRegisterWindowClass;
         }
+
+        const overlayWindow: HWND = if (WINDOW_PER_MONITOR) undefined else try createOverlayWindow();
+        std.log.info("Created overlay window: {}", .{overlayWindow});
 
         var hHookObjectCreate = SetWinEventHook(
             EVENT_OBJECT_SHOW,
@@ -105,35 +115,30 @@ pub const WindowManager = struct {
 
         return Self{
             .allocator = allocator,
-            .layers = layers,
+            .monitors = std.ArrayList(Monitor).init(allocator),
             .hotkeys = std.ArrayList(Hotkey).init(allocator),
             .ignoredClassNames = std.StringHashMap(bool).init(allocator),
-            .overlayWindow = overlayWindow,
 
             .hHookObjectCreate = hHookObjectCreate,
             .hHookObjectHide = hHookObjectHide,
             .hHookObjectFocus = hHookObjectFocus,
             .hHookObjectMoved = hHookObjectMoved,
+
+            .virtualArea = undefined,
+            .overlayWindow = overlayWindow,
         };
     }
 
     pub fn deinit(self: *Self) void {
-        // Show all windows.
-        for (self.layers.items) |*layer| {
-            for (layer.windows.items) |*window| {
-                _ = ShowWindow(window.hwnd, SW_SHOW);
-            }
-        }
-
         _ = UnhookWinEvent(self.hHookObjectCreate);
         _ = UnhookWinEvent(self.hHookObjectHide);
         _ = UnhookWinEvent(self.hHookObjectFocus);
         _ = UnhookWinEvent(self.hHookObjectMoved);
 
-        for (self.layers.items) |*layer| {
-            layer.deinit();
+        for (self.monitors.items) |*monitor| {
+            monitor.deinit();
         }
-        self.layers.deinit();
+        self.monitors.deinit();
         self.hotkeys.deinit();
         self.ignoredClassNames.deinit();
     }
@@ -146,13 +151,29 @@ pub const WindowManager = struct {
         try self.ignoredClassNames.put("tooltips_class32", true);
         try self.ignoredClassNames.put("ForegroundStaging", true);
 
-        _ = SetWindowLongPtrA(self.overlayWindow, GWLP_USERDATA, @bitCast(isize, @ptrToInt(self)));
+        // Register hotkey to close window. (win+escape)
+        if (RegisterHotKey(
+            null, // @todo
+            HK_CLOSE_WINDOW,
+            HOT_KEY_MODIFIERS.initFlags(.{
+                .WIN = 1,
+                .NOREPEAT = 1,
+            }),
+            VK_ESCAPE,
+        ) == 0) {
+            return error.FailedToRegisterHotkey;
+        }
 
-        //SetWindowsHookExA(.CALLWNDPROCRET, this.handleWindowProcRette);
+        try self.updateMonitorInfos();
 
         // Initial update + layout.
         self.updateWindowInfos();
-        self.layoutWindows();
+        self.layoutWindowsOnAllMonitors();
+
+        self.rerenderOverlay();
+        //for (self.monitors.items) |*monitor| {
+        //    monitor.rerenderOverlay();
+        //}
 
         const defaultHotkeys = [_]Hotkey{
             .{
@@ -239,7 +260,7 @@ pub const WindowManager = struct {
 
     pub fn registerHotkey(self: *Self, hotkey: Hotkey) !void {
         if (RegisterHotKey(
-            self.overlayWindow,
+            null,
             @intCast(i32, self.hotkeys.items.len),
             hotkey.mods,
             hotkey.key,
@@ -249,6 +270,29 @@ pub const WindowManager = struct {
         }
 
         try self.hotkeys.append(hotkey);
+    }
+
+    pub fn handleHotkey(self: *Self, wParam: WPARAM) void {
+        switch (wParam) {
+            HK_CLOSE_WINDOW => PostQuitMessage(0),
+            else => self.runHotkey(@intCast(usize, wParam)),
+        }
+
+        const hdc = GetDC(null);
+        defer _ = ReleaseDC(null, hdc);
+
+        if (WINDOW_PER_MONITOR) {
+            for (self.monitors.items) |*monitor| {
+                var clientRect: RECT = undefined;
+                _ = GetClientRect(monitor.overlayWindow, &clientRect);
+                monitor.renderOverlay(hdc, clientRect, monitor == self.getCurrentMonitor(), false);
+                monitor.rerenderOverlay();
+            }
+        } else {
+            var clientRect: RECT = undefined;
+            _ = GetClientRect(self.overlayWindow, &clientRect);
+            self.renderOverlay(hdc, clientRect, false);
+        }
     }
 
     pub fn runHotkey(self: *Self, index: usize) void {
@@ -267,104 +311,6 @@ pub const WindowManager = struct {
         self.currentCommand = .None;
     }
 
-    fn createOverlayWindow() !HWND {
-        const hInstance = GetModuleHandleA(null);
-        const WINDOW_NAME = "zwtwm";
-
-        const winClass = WNDCLASSEXA{
-            .cbSize = @intCast(u32, @sizeOf(WNDCLASSEXA)),
-            .style = WNDCLASS_STYLES.initFlags(.{}),
-            .lpfnWndProc = Self.WndProc,
-            .cbClsExtra = 0,
-            .cbWndExtra = 0,
-            .hInstance = hInstance,
-            .hIcon = null,
-            .hCursor = null,
-            .hbrBackground = null,
-            .lpszMenuName = null,
-            .lpszClassName = WINDOW_NAME,
-            .hIconSm = null,
-        };
-
-        if (RegisterClassExA(&winClass) == 0) {
-            return error.FailedToRegisterWindowClass;
-        }
-
-        const hwnd = CreateWindowExA(
-            WINDOW_EX_STYLE.initFlags(.{
-                .LAYERED = 1,
-                .TRANSPARENT = 1,
-                .COMPOSITED = 1,
-                .NOACTIVATE = 0,
-                .TOPMOST = 1,
-            }),
-            WINDOW_NAME,
-            WINDOW_NAME,
-            WINDOW_STYLE.initFlags(.{
-                .VISIBLE = 1,
-                .MAXIMIZE = 1,
-            }),
-            100, // x
-            100, // y
-            200, // width
-            200, // height
-            null,
-            null,
-            hInstance,
-            null,
-        );
-
-        if (hwnd) |window| {
-            // Make window transparent.
-            if (SetLayeredWindowAttributes(
-                window,
-                0,
-                10,
-                LAYERED_WINDOW_ATTRIBUTES_FLAGS.initFlags(.{
-                    .ALPHA = 0,
-                    .COLORKEY = 1,
-                }),
-            ) == 0) {
-                return error.FailedToSetWindowOpacity;
-            }
-
-            // Register hotkey to close window. (win+escape)
-            if (RegisterHotKey(
-                window,
-                HK_CLOSE_WINDOW,
-                HOT_KEY_MODIFIERS.initFlags(.{
-                    .WIN = 1,
-                    .NOREPEAT = 1,
-                }),
-                VK_ESCAPE,
-            ) == 0) {
-                return error.FailedToRegisterHotkey;
-            }
-
-            // Remove title bar and other styles.
-            if (SetWindowLongPtrA(window, GWL_STYLE, 0) == 0) {
-                return error.FailedToSetWindowLongPtr;
-            }
-
-            const x = 0;
-            const y = 0;
-            const width = GetSystemMetrics(SM_CXSCREEN);
-            const height = GetSystemMetrics(SM_CYSCREEN);
-
-            if (SetWindowPos(window, null, x, y, width, height, //
-                SET_WINDOW_POS_FLAGS.initFlags(.{
-                .NOACTIVATE = 1,
-            })) == 0) {
-                return error.FailedToSetWindowPosition;
-            }
-
-            _ = ShowWindow(window, SW_SHOW);
-
-            return window;
-        }
-        return error.FailedToCreateOverlayWindow;
-    }
-
     fn handleWindowEvent(self: *WindowManager, event: u32, hwnd: HWND) void {
         const className = getWindowString(hwnd, GetClassNameA, .{}, root.gWindowStringArena) catch unreachable;
         defer className.deinit();
@@ -378,19 +324,19 @@ pub const WindowManager = struct {
                 }
 
                 if (!self.isWindowManaged(hwnd)) {
-                    self.manageWindow(hwnd, false) catch {
+                    const monitor = self.manageWindow(hwnd, true) catch {
                         std.log.err("Failed to manage window {}:{s}: '{s}'", .{ hwnd, className.value, windowTitle.value });
                         return;
                     };
-
-                    self.layoutWindows();
+                    monitor.currentWindow = 0;
+                    monitor.layoutWindows();
                 }
             },
 
             EVENT_OBJECT_DESTROY => {
                 if (self.isWindowManaged(hwnd)) {
                     self.removeManagedWindow(hwnd);
-                    self.layoutWindows();
+                    self.layoutWindowsOnAllMonitors();
                     self.focusCurrentWindow();
                 }
             },
@@ -436,41 +382,62 @@ pub const WindowManager = struct {
         //_ = PostMessageA(root.gWindowManager.overlayWindow, CWM_WINDOW_CREATED, @ptrToInt(hwnd), @intCast(isize, event));
     }
 
-    fn WndProc(
+    pub fn WndProc(
         hwnd: HWND,
         msg: u32,
         wParam: WPARAM,
         lParam: LPARAM,
     ) callconv(@import("std").os.windows.WINAPI) LRESULT {
-        //std.debug.print("WndProc({}, {}, {})\n", .{ msg, wParam, lParam });
-
         switch (msg) {
             WM_CREATE => {},
             WM_CLOSE => {},
             WM_DESTROY => PostQuitMessage(0),
 
+            WM_DISPLAYCHANGE => {
+                var self = @intToPtr(*WindowManager, @bitCast(usize, GetWindowLongPtrA(hwnd, GWLP_USERDATA)));
+                std.log.debug("Display info changed: {}, {}, {any}", .{ wParam, lParam, @bitCast([4]u16, lParam) });
+                self.updateMonitorInfos() catch {
+                    std.log.err("Failed to update monitor infos.", .{});
+                };
+            },
+
             WM_HOTKEY => {
                 var self = @intToPtr(*WindowManager, @bitCast(usize, GetWindowLongPtrA(hwnd, GWLP_USERDATA)));
-                switch (wParam) {
-                    HK_CLOSE_WINDOW => PostQuitMessage(0),
-                    else => self.runHotkey(@intCast(usize, wParam)),
-                }
-
-                const hdc = GetDC(null);
-                defer _ = ReleaseDC(null, hdc);
-
-                var clientRect: RECT = undefined;
-                _ = GetClientRect(hwnd, &clientRect);
-                self.renderOverlay(hdc, clientRect);
             },
 
             WM_PAINT => {
                 var self = @intToPtr(*WindowManager, @bitCast(usize, GetWindowLongPtrA(hwnd, GWLP_USERDATA)));
-                var ps: PAINTSTRUCT = undefined;
-                var hdc = BeginPaint(hwnd, &ps);
-                defer _ = EndPaint(hwnd, &ps);
-                self.clearBackground(hdc, ps.rcPaint);
-                self.renderOverlay(hdc, ps.rcPaint);
+
+                if (!WINDOW_PER_MONITOR) {
+                    var clientRect: RECT = undefined;
+                    _ = GetClientRect(self.overlayWindow, &clientRect);
+                    //_ = InvalidateRect(self.overlayWindow, &clientRect, 1);
+
+                    if (true) {
+                        var ps: PAINTSTRUCT = undefined;
+                        var hdc = BeginPaint(hwnd, &ps);
+                        defer _ = EndPaint(hwnd, &ps);
+                        std.log.debug("paint: {}, {}", .{ ps.rcPaint, clientRect });
+                        //self.clearBackground(hdc, clientRect);
+                        //self.renderOverlay(hdc, clientRect, true);
+                        self.clearBackground(hdc, ps.rcPaint);
+                        self.renderOverlay(hdc, ps.rcPaint, true);
+                    } else {
+                        const hdc = GetDC(hwnd);
+                        defer _ = ReleaseDC(hwnd, hdc);
+
+                        std.log.debug("paint: {}", .{clientRect});
+                        self.clearBackground(hdc, clientRect);
+                        self.renderOverlay(hdc, clientRect, true);
+                    }
+                } else {
+                    var ps: PAINTSTRUCT = undefined;
+                    var hdc = BeginPaint(hwnd, &ps);
+                    defer _ = EndPaint(hwnd, &ps);
+                    const monitor = self.getMonitorFromOverlayWindow(hwnd);
+                    self.clearBackground(hdc, ps.rcPaint);
+                    monitor.renderOverlay(hdc, ps.rcPaint, monitor == self.getCurrentMonitor(), true);
+                }
             },
 
             CWM_WINDOW_CREATED => {
@@ -487,53 +454,27 @@ pub const WindowManager = struct {
     }
 
     fn clearBackground(self: *Self, hdc: HDC, region: RECT) void {
+        //var backgroundBrush = CreateSolidBrush(rgb(255, 0, 255));
         var backgroundBrush = CreateSolidBrush(0);
         defer _ = DeleteObject(backgroundBrush);
         _ = FillRect(hdc, &region, backgroundBrush);
-    }
-
-    fn renderOverlay(self: *Self, hdc: HDC, region: RECT) void {
-        var brushFocused = CreateSolidBrush(rgb(200, 50, 25));
-        defer _ = DeleteObject(brushFocused);
-        var brushUnfocused = CreateSolidBrush(rgb(25, 50, 200));
-        defer _ = DeleteObject(brushUnfocused);
-
-        const rect = RECT{
-            .left = region.left + self.gap,
-            .right = region.right - self.gap,
-            .top = region.top + self.gap,
-            .bottom = region.bottom - self.gap,
-        };
-
-        var layer = self.getCurrentLayer();
-
-        for (layer.windows.items) |*window, i| {
-            const winRect = window.rect.expand(0).toRECT();
-
-            if (i == self.currentWindow) {
-                const brush = if (window.hwnd == GetForegroundWindow()) brushFocused else brushUnfocused;
-
-                var k: i32 = 0;
-                while (k < 2) : (k += 1) {
-                    const winRect2 = window.rect.expand(-k).toRECT();
-                    _ = FrameRect(hdc, &winRect2, brush);
-                }
-            }
-        }
     }
 
     fn updateWindowInfos(self: *Self) void {
         _ = EnumWindows(Self.handleEnumWindows, @bitCast(isize, @ptrToInt(self)));
 
         if (root.LOG_LAYERS) {
-            for (self.layers.items) |*layer, i| {
-                if (layer.isEmpty()) continue;
+            for (self.monitors.items) |*monitor, k| {
+                std.debug.print("Monitor {}\n", .{k});
+                for (monitor.layers.items) |*layer, i| {
+                    if (layer.isEmpty()) continue;
 
-                std.debug.print("Layer {}\n", .{i});
-                for (layer.windows.items) |*window| {
-                    std.debug.print("  {s}: ", .{window.className.value});
-                    std.debug.print("{s}", .{window.title.value});
-                    std.debug.print("   -   {}\n", .{window.rect});
+                    std.debug.print("  Layer {}\n", .{i});
+                    for (layer.windows.items) |*window| {
+                        std.debug.print("  {s}: ", .{window.className.value});
+                        std.debug.print("{s}", .{window.title.value});
+                        std.debug.print("   -   {}\n", .{window.rect});
+                    }
                 }
             }
         }
@@ -563,10 +504,137 @@ pub const WindowManager = struct {
             return 1;
         }
 
-        self.manageWindow(hwnd, false) catch {
+        _ = self.manageWindow(hwnd, false) catch {
             std.log.err("Failed to manage window {}:{s}: '{s}'", .{ hwnd, className.value, windowTitle.value });
         };
 
+        return 1;
+    }
+
+    const MonitorInfo = struct {
+        hmonitor: HMONITOR,
+        info: MONITORINFO,
+        center: POINT,
+    };
+
+    fn updateMonitorInfos(self: *Self) !void {
+        var newMonitors = std.ArrayList(MonitorInfo).init(self.allocator);
+        defer newMonitors.deinit();
+        _ = EnumDisplayMonitors(null, null, Self.handleEnumDisplayMonitors, @bitCast(isize, @ptrToInt(&newMonitors)));
+        for (newMonitors.items) |*mon| {
+            std.log.debug("Monitor: {}, {}, {}", .{ mon.hmonitor, mon.info.rcMonitor, mon.info.rcWork });
+        }
+
+        // Try to match new monitors to existing monitors and just update the existing one.
+        std.log.debug("Match monitors.", .{});
+
+        var deleteMonitorsStartingAt: ?usize = null;
+        for (self.monitors.items) |*monitor, k| {
+            const center = monitor.getCenter();
+            var closestIndex: ?usize = null;
+            var closestDistance: i32 = 0;
+            std.log.debug("  [{}] {}", .{ k, center });
+            for (newMonitors.items) |*new, i| {
+                const newCenter = new.center;
+                const distanceX = std.math.absInt(newCenter.x - center.x) catch unreachable;
+                const distanceY = std.math.absInt(newCenter.y - center.y) catch unreachable;
+                const distance = distanceX + distanceY;
+
+                std.log.debug("    [{}] {} -> {}", .{ i, newCenter, distance });
+                if (closestIndex == null or distance < closestDistance) {
+                    closestIndex = i;
+                    closestDistance = distance;
+                }
+            }
+
+            if (closestIndex) |i| {
+                std.log.debug("  [{}] closest is {}", .{ k, i });
+                const new = newMonitors.orderedRemove(i);
+                monitor.updateMonitorInfo(new.hmonitor);
+            } else {
+                // No closest one found, monitors have been removed.
+                std.log.debug("  No closest monitor found, which means at least one monitor has been removed.", .{});
+
+                deleteMonitorsStartingAt = k;
+                break;
+            }
+        }
+
+        if (deleteMonitorsStartingAt) |i| {
+            std.debug.assert(newMonitors.items.len == 0);
+            while (i < self.monitors.items.len) {
+                std.log.debug("Remove monitor at {}", .{i});
+                self.monitors.items[i].deinit();
+                _ = self.monitors.swapRemove(i);
+            }
+        } else if (newMonitors.items.len > 0) {
+            // New monitors found.
+            std.log.debug("Add new monitors", .{});
+            for (newMonitors.items) |*new| {
+                if (new.info.rcMonitor.left == 0 and new.info.rcMonitor.top == 0) {
+                    // 0, 0 is the primary monitor, insert that one at the beginning.
+                    std.log.debug("Add new primary monitor {}", .{new.info.rcMonitor});
+                    try self.monitors.insert(0, try Monitor.init(new.hmonitor, self));
+                } else {
+                    try self.monitors.append(try Monitor.init(new.hmonitor, self));
+                }
+            }
+        }
+
+        if (!WINDOW_PER_MONITOR) {
+            _ = SetWindowLongPtrA(self.overlayWindow, GWLP_USERDATA, @bitCast(isize, @ptrToInt(self)));
+        } else {
+            for (self.monitors.items) |*monitor| {
+                _ = SetWindowLongPtrA(monitor.overlayWindow, GWLP_USERDATA, @bitCast(isize, @ptrToInt(self)));
+            }
+        }
+        std.log.debug("Update monitor infos done.", .{});
+
+        self.virtualArea = (Rect{
+            .x = GetSystemMetrics(SM_XVIRTUALSCREEN),
+            .y = GetSystemMetrics(SM_YVIRTUALSCREEN),
+            .width = GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            .height = GetSystemMetrics(SM_CYVIRTUALSCREEN),
+        }).toRECT();
+
+        std.log.warn("virtual screen: {}", .{self.virtualArea});
+
+        if (!WINDOW_PER_MONITOR) {
+            if (SetWindowPos(
+                self.overlayWindow,
+                null,
+                self.virtualArea.left,
+                self.virtualArea.top,
+                self.virtualArea.right - self.virtualArea.left,
+                self.virtualArea.bottom - self.virtualArea.top,
+                SET_WINDOW_POS_FLAGS.initFlags(.{ .NOACTIVATE = 1 }),
+            ) == 0) {
+                std.log.err("Failed to set window rect of overlay window", .{});
+            }
+        }
+    }
+
+    fn handleEnumDisplayMonitors(
+        hmonitor: HMONITOR,
+        hdc: HDC,
+        rect: *RECT,
+        param: LPARAM,
+    ) callconv(@import("std").os.windows.WINAPI) BOOL {
+        var monitors = @intToPtr(*std.ArrayList(MonitorInfo), @bitCast(usize, param));
+        var monitorInfo: MONITORINFO = undefined;
+        monitorInfo.cbSize = @sizeOf(MONITORINFO);
+        if (GetMonitorInfoA(hmonitor, &monitorInfo) == 0) {
+            std.log.err("Failed to get monitor info for {}", .{hmonitor});
+            return 0;
+        }
+        monitors.append(.{
+            .hmonitor = hmonitor,
+            .info = monitorInfo,
+            .center = .{
+                .x = @divTrunc(monitorInfo.rcMonitor.left + monitorInfo.rcMonitor.right, 2),
+                .y = @divTrunc(monitorInfo.rcMonitor.top + monitorInfo.rcMonitor.bottom, 2),
+            },
+        }) catch return 0;
         return 1;
     }
 
@@ -578,8 +646,15 @@ pub const WindowManager = struct {
     }
 
     fn isWindowManageable(self: *Self, hwnd: HWND) bool {
-        if (hwnd == self.overlayWindow)
-            return false;
+        if (!WINDOW_PER_MONITOR) {
+            if (hwnd == self.overlayWindow)
+                return false;
+        } else {
+            for (self.monitors.items) |*monitor| {
+                if (hwnd == monitor.overlayWindow)
+                    return false;
+            }
+        }
 
         const className = getWindowString(hwnd, GetClassNameA, .{}, root.gWindowStringArena) catch return false;
         defer className.deinit();
@@ -631,44 +706,44 @@ pub const WindowManager = struct {
     }
 
     fn getWindow(self: *Self, hwnd: HWND) ?*Window {
-        return self.getCurrentLayer().getWindow(hwnd);
+        return self.getCurrentMonitor().getCurrentLayer().getWindow(hwnd);
     }
 
     fn isWindowManaged(self: *Self, hwnd: HWND) bool {
-        for (self.layers.items) |*layer| {
-            if (layer.containsWindow(hwnd)) {
+        for (self.monitors.items) |*monitor| {
+            if (monitor.isWindowManaged(hwnd)) {
                 return true;
             }
         }
         return false;
     }
 
-    fn manageWindow(self: *Self, hwnd: HWND, onTop: bool) !void {
-        if (self.isWindowManaged(hwnd)) {
-            return;
-        }
-
-        var layer = self.getCurrentLayer();
-        try layer.addWindow(hwnd, onTop);
-    }
-
-    fn removeManagedWindow(self: *Self, hwnd: HWND) void {
-        if (!self.isWindowManaged(hwnd)) {
-            return;
-        }
-
-        var removedIndex: usize = 0;
-        for (self.layers.items) |*layer, i| {
-            const k = layer.removeWindow(hwnd);
-            if (i == self.currentLayer) {
-                removedIndex = k;
+    fn manageWindow(self: *Self, hwnd: HWND, onTop: bool) !*Monitor {
+        for (self.monitors.items) |*monitor| {
+            if (monitor.isWindowManaged(hwnd)) {
+                return monitor;
             }
         }
 
-        if (removedIndex < self.currentWindow) {
-            self.currentWindow -= 1;
+        // Try to put window on monitor with the greatest intersection area.
+        const hmonitor = MonitorFromWindow(hwnd, .PRIMARY);
+        for (self.monitors.items) |*monitor| {
+            if (monitor.hmonitor == hmonitor) {
+                try monitor.manageWindow(hwnd, onTop);
+                return monitor;
+            }
         }
-        self.clampCurrentWindowIndex();
+
+        // Otherwise put it on the current monitor.
+        var monitor = self.getCurrentMonitor();
+        try monitor.manageWindow(hwnd, onTop);
+        return monitor;
+    }
+
+    fn removeManagedWindow(self: *Self, hwnd: HWND) void {
+        for (self.monitors.items) |*monitor| {
+            monitor.removeManagedWindow(hwnd);
+        }
     }
 
     fn setCurrentWindow(self: *Self, hwnd: HWND) void {
@@ -676,237 +751,51 @@ pub const WindowManager = struct {
             return;
         }
 
-        const layer = self.getCurrentLayer();
-        if (!layer.containsWindow(hwnd)) {
-            return;
+        self.getCurrentMonitor().setCurrentWindow(hwnd);
+    }
+
+    fn getMonitor(self: *Self, index: usize) *Monitor {
+        std.debug.assert(index < self.monitors.items.len);
+        return &self.monitors.items[index];
+    }
+
+    fn getCurrentMonitor(self: *Self) *Monitor {
+        return self.getMonitor(self.currentMonitor);
+    }
+
+    fn getMonitorFromOverlayWindow(self: *Self, hwnd: HWND) *Monitor {
+        for (self.monitors.items) |*monitor| {
+            if (monitor.overlayWindow == hwnd)
+                return monitor;
         }
 
-        self.currentWindow = layer.getWindowIndex(hwnd).?;
-    }
-
-    fn getLayer(self: *Self, index: usize) *Layer {
-        std.debug.assert(index < self.layers.items.len);
-        return &self.layers.items[index];
-    }
-
-    fn getCurrentLayer(self: *Self) *Layer {
-        return self.getLayer(self.currentLayer);
-    }
-
-    fn clampCurrentWindowIndex(self: *Self) void {
-        const layer = self.getCurrentLayer();
-        if (layer.windows.items.len == 0) {
-            self.currentWindow = 0;
-        } else if (self.currentWindow >= layer.windows.items.len) {
-            self.currentWindow = layer.windows.items.len - 1;
-        }
+        unreachable;
     }
 
     fn selectPrevWindow(self: *Self, args: HotkeyArgs) void {
-        std.log.info("selectPrevWindow", .{});
-        const layer = self.getCurrentLayer();
-        if (layer.windows.items.len == 0) {
-            self.currentWindow = 0;
-        } else {
-            if (self.currentWindow == 0) {
-                self.currentWindow = layer.windows.items.len - 1;
-            } else {
-                self.currentWindow -= 1;
-            }
-        }
-
-        self.focusCurrentWindow();
-        self.layoutWindows();
+        self.getCurrentMonitor().selectPrevWindow(args);
     }
 
     fn selectNextWindow(self: *Self, args: HotkeyArgs) void {
-        std.log.info("selectNextWindow", .{});
-        const layer = self.getCurrentLayer();
-        if (layer.windows.items.len == 0) {
-            self.currentWindow = 0;
-        } else {
-            self.currentWindow += 1;
-            if (self.currentWindow >= layer.windows.items.len) {
-                self.currentWindow = 0;
-            }
-        }
-
-        self.focusCurrentWindow();
-        self.layoutWindows();
+        self.getCurrentMonitor().selectNextWindow(args);
     }
 
     fn moveCurrentWindowToTop(self: *Self, args: HotkeyArgs) void {
-        //std.log.info("moveCurrentWindowToTop", .{});
-        const layer = self.getCurrentLayer();
-        layer.moveWindowToTop(self.currentWindow);
-        self.currentWindow = 0;
-
-        self.focusCurrentWindow();
-        self.layoutWindows();
+        self.getCurrentMonitor().moveCurrentWindowToTop(args);
     }
 
     fn focusCurrentWindow(self: *Self) void {
-        const layer = self.getCurrentLayer();
-        if (layer.getWindowAt(self.currentWindow)) |window| {
-            _ = SetForegroundWindow(window.hwnd);
-        }
+        self.getCurrentMonitor().focusCurrentWindow();
     }
 
-    fn rerenderOverlay(self: *Self) void {
-        _ = InvalidateRect(self.overlayWindow, null, 1);
-        _ = RedrawWindow(
-            self.overlayWindow,
-            null,
-            null,
-            REDRAW_WINDOW_FLAGS.initFlags(.{ .UPDATENOW = 1 }),
-        );
+    fn layoutWindowsOnAllMonitors(self: *Self) void {
+        for (self.monitors.items) |*monitor| {
+            monitor.layoutWindows();
+        }
     }
 
     fn layoutWindows(self: *Self) void {
-        std.log.notice("Layout windows", .{});
-
-        var monitor = getMonitorRect() catch return;
-
-        if (root.ONLY_USE_HALF_MONITOR) {
-            monitor.width = @divTrunc(monitor.width, 2) - 1;
-            monitor.x += monitor.width + 2;
-        }
-
-        var workingArea = Rect{
-            .x = monitor.x + self.gap,
-            .y = monitor.y + self.gap,
-            .width = monitor.width - self.gap * 2,
-            .height = monitor.height - self.gap * 2,
-        };
-
-        var layer = self.getCurrentLayer();
-
-        const numWindows: i32 = @intCast(i32, layer.windows.items.len);
-        if (numWindows > 0) {
-            if (layer.fullscreen) {
-                const window = layer.getWindowAt(self.currentWindow).?;
-
-                if (isWindowMaximized(window.hwnd) catch false) {
-                    std.log.debug("Restoring window because it is maximized: {}", .{window.hwnd});
-                    _ = ShowWindow(window.hwnd, SW_RESTORE);
-                }
-
-                window.rect = workingArea;
-
-                const visualRect = getRectWithoutBorder(window.hwnd, window.rect);
-                if (SetWindowPos(
-                    window.hwnd,
-                    null,
-                    visualRect.x,
-                    visualRect.y,
-                    visualRect.width,
-                    visualRect.height,
-                    SET_WINDOW_POS_FLAGS.initFlags(.{}),
-                ) == 0) {
-                    std.log.err("Failed to set window position of {}", .{window.hwnd});
-                }
-            } else {
-                var hdwp = BeginDeferWindowPos(@intCast(i32, numWindows));
-                if (hdwp == 0) {
-                    return;
-                }
-
-                var x: i32 = workingArea.x;
-                for (layer.windows.items) |*window, i| {
-                    if (isWindowMaximized(window.hwnd) catch false) {
-                        std.log.debug("Restoring window because it is maximized: {}", .{window.hwnd});
-                        _ = ShowWindow(window.hwnd, SW_RESTORE);
-                    }
-
-                    var area = workingArea;
-                    if (i + 1 < layer.windows.items.len) {
-                        // More windows after this one.
-                        const horizontalOrVertical = if (root.ONLY_USE_HALF_MONITOR) 1 else 0;
-                        if (@mod(i, 2) == horizontalOrVertical) {
-                            const ratio = if (i == 0) self.splitRatio else 0.5;
-                            const split = @floatToInt(i32, @intToFloat(f64, area.width) * ratio);
-
-                            workingArea.x += split + self.gap;
-                            workingArea.width -= split + self.gap;
-                            area.width = split;
-                        } else {
-                            const ratio = if (i == 0) self.splitRatio else 0.5;
-                            const split = @floatToInt(i32, @intToFloat(f64, area.height) * ratio);
-
-                            workingArea.y += split + self.gap;
-                            workingArea.height -= split + self.gap;
-                            area.height = split;
-                        }
-                    }
-
-                    window.rect = area;
-
-                    const visualRect = getRectWithoutBorder(window.hwnd, window.rect);
-                    hdwp = DeferWindowPos(
-                        hdwp,
-                        window.hwnd,
-                        null,
-                        visualRect.x,
-                        visualRect.y,
-                        visualRect.width,
-                        visualRect.height,
-                        SET_WINDOW_POS_FLAGS.initFlags(.{
-                            .NOOWNERZORDER = 1,
-                            .SHOWWINDOW = 1,
-                        }),
-                    );
-
-                    if (hdwp == 0) {
-                        return;
-                    }
-                }
-
-                _ = EndDeferWindowPos(hdwp);
-            }
-
-            for (layer.windows.items) |*window| {
-                _ = InvalidateRect(window.hwnd, null, 1);
-            }
-        }
-
-        self.rerenderOverlay();
-
-        if (root.LOG_LAYERS) {
-            for (self.layers.items) |*l, i| {
-                if (l.isEmpty()) continue;
-
-                std.debug.print("  Layer {}\n", .{i});
-                for (l.windows.items) |*window| {
-                    std.debug.print("    {s}: ", .{window.className.value});
-                    std.debug.print("{s}", .{window.title.value});
-                    std.debug.print("   -   {}\n", .{window.rect});
-                }
-            }
-        }
-    }
-
-    fn setWindowVisibility(self: *Self, hwnd: HWND, shouldBeVisible: bool) void {
-        const isMinimized = IsIconic(hwnd) != 0;
-        const isVisible = IsWindowVisible(hwnd) != 0;
-
-        if (shouldBeVisible and !isMinimized and isVisible) {
-            // Already visible, nothing to do.
-            //std.log.debug("Window {} is already visible.", .{hwnd});
-            return;
-        }
-
-        if (!shouldBeVisible and !isVisible) {
-            // Already hidden, nothing to do.
-            //std.log.debug("Window {} is already hidden.", .{hwnd});
-            return;
-        }
-
-        // Temp: only minimize window, later we actually want to hide them.
-        if (shouldBeVisible) {
-            _ = ShowWindow(hwnd, SW_RESTORE);
-        } else {
-            _ = ShowWindow(hwnd, SW_HIDE);
-        }
+        self.getCurrentMonitor().layoutWindows();
     }
 
     fn updateWindowVisibility(self: *Self, hwnd: HWND) void {
@@ -914,113 +803,44 @@ pub const WindowManager = struct {
     }
 
     fn increaseGap(self: *Self, args: HotkeyArgs) void {
-        self.gap += 5;
-        std.log.info("Inc gap: {}", .{self.gap});
-        self.layoutWindows();
+        self.options.gap.? += 5;
+        self.layoutWindowsOnAllMonitors();
     }
 
     fn decreaseGap(self: *Self, args: HotkeyArgs) void {
-        self.gap -= 5;
-        if (self.gap < 0) {
-            self.gap = 0;
+        self.options.gap.? -= 5;
+        if (self.options.gap.? < 0) {
+            self.options.gap.? = 0;
         }
-        std.log.info("Dec gap: {}", .{self.gap});
-        self.layoutWindows();
+        self.layoutWindowsOnAllMonitors();
     }
 
     fn increaseSplit(self: *Self, args: HotkeyArgs) void {
-        self.splitRatio += 0.025;
-        if (self.splitRatio > 0.9) {
-            self.splitRatio = 0.9;
+        self.options.splitRatio.? += 0.025;
+        if (self.options.splitRatio.? > 0.9) {
+            self.options.splitRatio.? = 0.9;
         }
-        std.log.info("Inc split: {}", .{self.splitRatio});
-        self.layoutWindows();
+        self.layoutWindowsOnAllMonitors();
     }
 
     fn decreaseSplit(self: *Self, args: HotkeyArgs) void {
-        self.splitRatio -= 0.025;
-        if (self.splitRatio < 0.1) {
-            self.splitRatio = 0.1;
+        self.options.splitRatio.? -= 0.025;
+        if (self.options.splitRatio.? < 0.1) {
+            self.options.splitRatio.? = 0.1;
         }
-        std.log.info("Dec split: {}", .{self.splitRatio});
-        self.layoutWindows();
+        self.layoutWindowsOnAllMonitors();
     }
 
     fn moveCurrentWindowToLayer(self: *Self, args: HotkeyArgs) void {
-        std.log.info("Move current window to layer: {}", .{args.usizeParam});
-        const newLayer = args.usizeParam;
-        if (newLayer == self.currentLayer) return;
-
-        if (newLayer < 0 or newLayer >= self.layers.items.len) {
-            std.log.err("Can't move window to layer {}: outside of range", .{args.usizeParam});
-            return;
-        }
-
-        var fromLayer = self.getCurrentLayer();
-        var toLayer = self.getLayer(@intCast(usize, newLayer));
-
-        if (fromLayer.getWindowAt(self.currentWindow)) |window| {
-            toLayer.addWindow(window.hwnd, false) catch unreachable;
-            _ = fromLayer.removeWindow(window.hwnd);
-            self.setWindowVisibility(window.hwnd, false);
-        }
-
-        self.clampCurrentWindowIndex();
-        self.focusCurrentWindow();
-        self.layoutWindows();
+        self.getCurrentMonitor().moveCurrentWindowToLayer(args);
     }
 
     fn toggleCurrentWindowOnLayer(self: *Self, args: HotkeyArgs) void {
-        std.log.info("Toggle current window on layer: {}", .{args.usizeParam});
-        const newLayer = args.usizeParam;
-        if (newLayer == self.currentLayer) return;
-
-        if (newLayer < 0 or newLayer >= self.layers.items.len) {
-            std.log.err("Layer {}: outside of range", .{args.usizeParam});
-            return;
-        }
-
-        var layer = self.getCurrentLayer();
-        var toLayer = self.getLayer(@intCast(usize, newLayer));
-
-        if (layer.getWindowAt(self.currentWindow)) |window| {
-            if (toLayer.containsWindow(window.hwnd)) {
-                _ = toLayer.removeWindow(window.hwnd);
-            } else {
-                toLayer.addWindow(window.hwnd, false) catch unreachable;
-            }
-        }
+        self.getCurrentMonitor().toggleCurrentWindowOnLayer(args);
     }
 
     fn switchLayer(self: *Self, args: HotkeyArgs) void {
-        std.log.info("Switch to layer: {}", .{args.usizeParam});
-        const newLayer = args.usizeParam;
-        if (newLayer == self.currentLayer) return;
-
-        if (newLayer < 0 or newLayer >= self.layers.items.len) {
-            std.log.err("Can't switch to layer {}: outside of range", .{args.usizeParam});
-            return;
-        }
-
-        var fromLayer = self.getCurrentLayer();
-        var toLayer = self.getLayer(@intCast(usize, newLayer));
-
-        // Hide windows in the current layer except ones that are also on the target layer.
-        for (fromLayer.windows.items) |*window| {
-            if (!toLayer.containsWindow(window.hwnd)) {
-                self.setWindowVisibility(window.hwnd, false);
-            }
-        }
-
-        for (toLayer.windows.items) |*window| {
-            // This doesn't do anything if the window is already visible.
-            self.setWindowVisibility(window.hwnd, true);
-        }
-
-        self.currentLayer = args.usizeParam;
-        self.currentWindow = 0;
-        self.focusCurrentWindow();
-        self.layoutWindows();
+        self.getCurrentMonitor().switchLayer(args);
     }
 
     fn layerCommand(self: *Self, args: HotkeyArgs) void {
@@ -1044,21 +864,19 @@ pub const WindowManager = struct {
     }
 
     fn toggleWindowFullscreen(self: *Self, args: HotkeyArgs) void {
-        var layer = self.getCurrentLayer();
-        layer.fullscreen = !layer.fullscreen;
-        self.layoutWindows();
+        self.getCurrentMonitor().toggleWindowFullscreen(args);
     }
 
     fn toggleForegroundWindowManaged(self: *Self, args: HotkeyArgs) void {
         const hwnd = GetForegroundWindow();
         if (self.isWindowManaged(hwnd)) {
             self.removeManagedWindow(hwnd);
-            self.layoutWindows();
+            self.layoutWindowsOnAllMonitors();
         } else
         //if (self.isWindowManageable(hwnd))
         {
-            self.manageWindow(hwnd, true) catch {};
-            self.layoutWindows();
+            const monitor = self.manageWindow(hwnd, true) catch return;
+            monitor.layoutWindows();
         }
     }
 
@@ -1071,5 +889,139 @@ pub const WindowManager = struct {
         defer title.deinit();
 
         std.log.notice("{s} ({}): '{s}'", .{ className.value, self.isWindowManageable(hwnd), title.value });
+    }
+
+    fn createOverlayWindow() !HWND {
+        const hInstance = GetModuleHandleA(null);
+
+        const rect = (Rect{
+            .x = GetSystemMetrics(SM_XVIRTUALSCREEN),
+            .y = GetSystemMetrics(SM_YVIRTUALSCREEN),
+            .width = GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            .height = GetSystemMetrics(SM_CYVIRTUALSCREEN),
+        }).toRECT();
+
+        const hwnd = CreateWindowExA(
+            WINDOW_EX_STYLE.initFlags(.{
+                .LAYERED = 1,
+                .TRANSPARENT = 1,
+                .COMPOSITED = 1,
+                .NOACTIVATE = 0,
+                .TOPMOST = 1,
+            }),
+            WINDOW_NAME,
+            WINDOW_NAME,
+            WINDOW_STYLE.initFlags(.{
+                .VISIBLE = 1,
+                .MAXIMIZE = 1,
+            }),
+            rect.left, // x
+            rect.top, // y
+            rect.right - rect.left, // width
+            rect.bottom - rect.top, // height
+            null,
+            null,
+            hInstance,
+            null,
+        );
+
+        if (hwnd) |window| {
+            // Make window transparent.
+            if (SetLayeredWindowAttributes(
+                window,
+                0,
+                10,
+                LAYERED_WINDOW_ATTRIBUTES_FLAGS.initFlags(.{
+                    .ALPHA = 0,
+                    .COLORKEY = 1,
+                }),
+            ) == 0) {
+                return error.FailedToSetWindowOpacity;
+            }
+
+            // Remove title bar and other styles.
+            if (SetWindowLongPtrA(window, GWL_STYLE, 0) == 0) {
+                return error.FailedToSetWindowLongPtr;
+            }
+
+            if (SetWindowPos(
+                window,
+                null,
+                rect.left, // x
+                rect.top, // y
+                rect.right - rect.left, // width
+                rect.bottom - rect.top, // height
+                SET_WINDOW_POS_FLAGS.initFlags(.{
+                    .NOACTIVATE = 1,
+                }),
+            ) == 0) {
+                return error.FailedToSetWindowPosition;
+            }
+
+            _ = ShowWindow(window, SW_SHOW);
+
+            return window;
+        }
+        return error.FailedToCreateOverlayWindow;
+    }
+
+    pub fn rerenderOverlay(self: *Self) void {
+        if (WINDOW_PER_MONITOR) {
+            for (self.monitors.items) |*monitor| {
+                monitor.rerenderOverlay();
+            }
+        } else {
+            var clientRect: RECT = undefined;
+            _ = GetClientRect(self.overlayWindow, &clientRect);
+            _ = InvalidateRect(self.overlayWindow, &clientRect, 1);
+            //_ = InvalidateRect(self.overlayWindow, null, 1);
+            _ = RedrawWindow(
+                self.overlayWindow,
+                null,
+                null,
+                REDRAW_WINDOW_FLAGS.initFlags(.{ .UPDATENOW = 1 }),
+            );
+        }
+    }
+
+    pub fn renderOverlay(self: *Self, hdc: HDC, region: RECT, convertToClient: bool) void {
+        var overlayRect: RECT = undefined;
+        _ = GetWindowRect(self.overlayWindow, &overlayRect);
+
+        std.log.debug("renderOverlay: {}, {}", .{ region, &overlayRect });
+        var brushFocused = CreateSolidBrush(rgb(200, 50, 25));
+        defer _ = DeleteObject(brushFocused);
+        var brushUnfocused = CreateSolidBrush(rgb(25, 50, 200));
+        defer _ = DeleteObject(brushUnfocused);
+        var brushUnfocused2 = CreateSolidBrush(rgb(255, 0, 255));
+        defer _ = DeleteObject(brushUnfocused2);
+
+        for (self.monitors.items) |*monitor, monitorIndex| {
+            var layer = monitor.getCurrentLayer();
+            const gap = layer.options.getGap(self.options);
+
+            var j: i32 = 0;
+            const monitorRect = if (convertToClient) screenToClient(self.overlayWindow, monitor.rect) else monitor.rect;
+            std.log.debug("renderOverlay monitor: {} -> {}", .{ monitor.rect, monitorRect });
+            while (j < 2) : (j += 1) {
+                const winRect2 = Rect.fromRECT(monitorRect).expand(-j).toRECT();
+                const brush = if (monitorIndex == self.currentMonitor) brushFocused else brushUnfocused2;
+                _ = FrameRect(hdc, &winRect2, brush);
+            }
+
+            for (layer.windows.items) |*window, i| {
+                const winRect = if (convertToClient) Rect.fromRECT(screenToClient(self.overlayWindow, window.rect.toRECT())) else window.rect;
+
+                if (i == monitor.currentWindow) {
+                    const brush = if (window.hwnd == GetForegroundWindow()) brushFocused else brushUnfocused;
+
+                    var k: i32 = 0;
+                    while (k < 2) : (k += 1) {
+                        const winRect2 = winRect.expand(-k).toRECT();
+                        _ = FrameRect(hdc, &winRect2, brush);
+                    }
+                }
+            }
+        }
     }
 };
