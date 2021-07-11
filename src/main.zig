@@ -5,7 +5,7 @@ usingnamespace @import("misc.zig");
 usingnamespace @import("window_manager.zig");
 usingnamespace @import("layer.zig");
 
-pub const LOG_LAYERS = true;
+pub const LOG_LAYERS = false;
 pub const ONLY_USE_HALF_MONITOR = false;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};

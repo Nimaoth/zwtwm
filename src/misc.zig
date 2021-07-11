@@ -2,8 +2,6 @@ const std = @import("std");
 
 usingnamespace @import("zigwin32").everything;
 
-pub const WINDOW_PER_MONITOR = true;
-
 pub const String = struct {
     value: []const u8,
     allocator: ?*std.mem.Allocator = null,
@@ -78,6 +76,36 @@ pub fn getWindowString(hwnd: HWND, comptime func: anytype, comptime lengthFunc: 
         const str = buffer[0..len];
         return String{ .value = str, .allocator = allocator };
     }
+}
+
+pub fn getWindowExeName(hwnd: HWND, allocator: *std.mem.Allocator) !String {
+    var dwProcId: u32 = 0;
+    _ = GetWindowThreadProcessId(hwnd, &dwProcId);
+    const hProc = OpenProcess(PROCESS_ACCESS_RIGHTS.initFlags(.{
+        .QUERY_INFORMATION = 1,
+        .VM_READ = 1,
+    }), 0, dwProcId);
+    defer _ = CloseHandle(hProc);
+
+    var buffer: []u8 = try allocator.alloc(u8, 260);
+    errdefer allocator.free(buffer);
+
+    const len = GetModuleFileNameA(
+        @ptrCast(HINSTANCE, hProc),
+        @ptrCast([*:0]u8, buffer.ptr),
+        @intCast(u32, buffer.len),
+    );
+    //const len = GetWindowModuleFileNameA(
+    //    hwnd,
+    //    @ptrCast([*:0]u8, buffer.ptr),
+    //    @intCast(u32, buffer.len),
+    //);
+    if (len == 0) {
+        return error.FailedToGetProcessName;
+    }
+
+    const str = buffer[0..len];
+    return String{ .value = str, .allocator = allocator };
 }
 
 pub fn getMonitorRect() !Rect {

@@ -44,10 +44,7 @@ pub const Monitor = struct {
             try layers.append(try Layer.init(windowManager.allocator));
         }
 
-        const overlayWindow = if (WINDOW_PER_MONITOR)
-            try createOverlayWindow(monitorInfo.rcMonitor)
-        else
-            undefined;
+        const overlayWindow = try createOverlayWindow(monitorInfo.rcMonitor);
         std.log.info("Created overlay window for monitor: {}", .{overlayWindow});
 
         return Monitor{
@@ -72,18 +69,16 @@ pub const Monitor = struct {
         self.rect = monitorInfo.rcMonitor;
         self.workingArea = monitorInfo.rcWork;
 
-        if (WINDOW_PER_MONITOR) {
-            if (SetWindowPos(
-                self.overlayWindow,
-                null,
-                self.workingArea.left,
-                self.workingArea.top,
-                self.workingArea.right - self.workingArea.left,
-                self.workingArea.bottom - self.workingArea.top,
-                SET_WINDOW_POS_FLAGS.initFlags(.{ .NOACTIVATE = 1 }),
-            ) == 0) {
-                std.log.err("Failed to set window rect of overlay window for monitor {}", .{self.workingArea});
-            }
+        if (SetWindowPos(
+            self.overlayWindow,
+            null,
+            self.workingArea.left,
+            self.workingArea.top,
+            self.workingArea.right - self.workingArea.left,
+            self.workingArea.bottom - self.workingArea.top,
+            SET_WINDOW_POS_FLAGS.initFlags(.{ .NOACTIVATE = 1 }),
+        ) == 0) {
+            std.log.err("Failed to set window rect of overlay window for monitor {}", .{self.workingArea});
         }
     }
 
@@ -190,6 +185,9 @@ pub const Monitor = struct {
 
         var layer = self.getCurrentLayer();
         try layer.addWindow(hwnd, onTop);
+        if (onTop) {
+            self.currentWindow = 0;
+        }
     }
 
     pub fn removeManagedWindow(self: *Self, hwnd: HWND) void {
@@ -256,6 +254,7 @@ pub const Monitor = struct {
 
         self.focusCurrentWindow();
         self.layoutWindows();
+        self.rerenderOverlay();
     }
 
     pub fn selectNextWindow(self: *Self, args: HotkeyArgs) void {
@@ -271,6 +270,7 @@ pub const Monitor = struct {
 
         self.focusCurrentWindow();
         self.layoutWindows();
+        self.rerenderOverlay();
     }
 
     pub fn moveCurrentWindowToTop(self: *Self, args: HotkeyArgs) void {
@@ -279,6 +279,7 @@ pub const Monitor = struct {
         self.currentWindow = 0;
         self.focusCurrentWindow();
         self.layoutWindows();
+        self.rerenderOverlay();
     }
 
     pub fn focusCurrentWindow(self: *Self) void {
@@ -299,8 +300,6 @@ pub const Monitor = struct {
     }
 
     pub fn layoutWindows(self: *Self) void {
-        std.log.notice("Layout windows", .{});
-
         var monitor = self.workingArea;
 
         if (root.ONLY_USE_HALF_MONITOR) {
@@ -407,11 +406,7 @@ pub const Monitor = struct {
             }
         }
 
-        if (WINDOW_PER_MONITOR) {
-            self.rerenderOverlay();
-        } else {
-            self.windowManager.rerenderOverlay();
-        }
+        //self.rerenderOverlay();
 
         if (root.LOG_LAYERS) {
             std.debug.print("Monitor {}\n", .{self.rect});
@@ -429,34 +424,36 @@ pub const Monitor = struct {
     }
 
     pub fn renderOverlay(self: *Self, hdc: HDC, region: RECT, isCurrent: bool, convertToClient: bool) void {
-        var brushFocused = CreateSolidBrush(rgb(200, 50, 25));
+        var brushFocused = CreateSolidBrush(rgb(50, 150, 250));
         defer _ = DeleteObject(brushFocused);
-        var brushUnfocused = CreateSolidBrush(rgb(25, 50, 200));
+        var brushUnfocused = CreateSolidBrush(rgb(200, 125, 40));
         defer _ = DeleteObject(brushUnfocused);
-        var brushUnfocused2 = CreateSolidBrush(rgb(255, 0, 255));
-        defer _ = DeleteObject(brushUnfocused2);
+        var brushCurrentMonitor = CreateSolidBrush(rgb(255, 0, 255));
+        defer _ = DeleteObject(brushCurrentMonitor);
 
         var layer = self.getCurrentLayer();
         const gap = layer.options.getGap(self.windowManager.options);
 
-        var j: i32 = 0;
-        const monitorRect = if (convertToClient) screenToClient(self.overlayWindow, self.rect) else self.rect;
-        while (j < 2) : (j += 1) {
-            const winRect2 = Rect.fromRECT(monitorRect).expand(-j).toRECT();
-            const brush = if (isCurrent) brushFocused else brushUnfocused2;
-            _ = FrameRect(hdc, &winRect2, brush);
-        }
+        if (isCurrent) {
+            var j: i32 = 0;
+            var monitorRect = if (convertToClient) screenToClient(self.overlayWindow, self.rect) else self.rect;
+            //std.log.debug("renderOverlay({}, {}):\nregion:   {}\nmonitor1: {}\nmonitor2: {}", .{ isCurrent, convertToClient, region, self.rect, monitorRect });
+            while (j < 1) : (j += 1) {
+                const winRect2 = Rect.fromRECT(monitorRect).expand(-j).toRECT();
+                _ = FrameRect(hdc, &winRect2, brushCurrentMonitor);
+            }
 
-        for (layer.windows.items) |*window, i| {
-            const winRect = if (convertToClient) Rect.fromRECT(screenToClient(self.overlayWindow, window.rect.toRECT())) else window.rect;
+            for (layer.windows.items) |*window, i| {
+                const winRect = if (convertToClient) Rect.fromRECT(screenToClient(self.overlayWindow, window.rect.toRECT())) else window.rect;
 
-            if (i == self.currentWindow) {
-                const brush = if (window.hwnd == GetForegroundWindow()) brushFocused else brushUnfocused;
+                if (i == self.currentWindow) {
+                    const brush = if (window.hwnd == GetForegroundWindow()) brushFocused else brushUnfocused;
 
-                var k: i32 = 0;
-                while (k < 2) : (k += 1) {
-                    const winRect2 = winRect.expand(-k).toRECT();
-                    _ = FrameRect(hdc, &winRect2, brush);
+                    var k: i32 = 0;
+                    while (k < 2) : (k += 1) {
+                        const winRect2 = winRect.expand(-k).toRECT();
+                        _ = FrameRect(hdc, &winRect2, brush);
+                    }
                 }
             }
         }
@@ -488,6 +485,7 @@ pub const Monitor = struct {
         self.clampCurrentWindowIndex();
         self.focusCurrentWindow();
         self.layoutWindows();
+        self.rerenderOverlay();
     }
 
     pub fn toggleCurrentWindowOnLayer(self: *Self, args: HotkeyArgs) void {
@@ -541,11 +539,13 @@ pub const Monitor = struct {
         self.currentWindow = 0;
         self.focusCurrentWindow();
         self.layoutWindows();
+        self.rerenderOverlay();
     }
 
     pub fn toggleWindowFullscreen(self: *Self, args: HotkeyArgs) void {
         var layer = self.getCurrentLayer();
         layer.fullscreen = !layer.fullscreen;
         self.layoutWindows();
+        self.rerenderOverlay();
     }
 };
