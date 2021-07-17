@@ -12,7 +12,7 @@ pub fn build(b: *std.build.Builder) void {
     const mode = b.standardReleaseOptions();
 
     const exe = b.addExecutable("zwtwm", "src/main.zig");
-    exe.addPackage(.{ .name = "zigwin32", .path = "./deps/zigwin32/win32.zig" });
+    exe.addPackage(.{ .name = "zigwin32", .path = "./deps/custom_zigwin32/win32.zig" });
 
     if (false) {
         exe.addIncludeDir("./src");

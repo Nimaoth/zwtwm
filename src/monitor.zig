@@ -278,6 +278,20 @@ pub const Monitor = struct {
         self.currentWindow = dstIndex;
     }
 
+    pub fn moveCurrentWindowUp(self: *Self) void {
+        const layer = self.getCurrentLayer();
+        const dstIndex = @mod(self.currentWindow + layer.windows.items.len - 1, layer.windows.items.len);
+        layer.moveWindowToIndex(self.currentWindow, dstIndex);
+        self.currentWindow = dstIndex;
+    }
+
+    pub fn moveCurrentWindowDown(self: *Self) void {
+        const layer = self.getCurrentLayer();
+        const dstIndex = @mod(self.currentWindow + 1, layer.windows.items.len);
+        layer.moveWindowToIndex(self.currentWindow, dstIndex);
+        self.currentWindow = dstIndex;
+    }
+
     pub fn moveCurrentWindowToTop(self: *Self) void {
         self.moveWindowToIndex(self.currentWindow, 0);
     }
@@ -418,8 +432,8 @@ pub const Monitor = struct {
 
                 std.debug.print("  Layer {}\n", .{i});
                 for (l.windows.items) |*window| {
-                    std.debug.print("    {s}: ", .{window.className.value});
-                    std.debug.print("{s}", .{window.title.value});
+                    std.debug.print("    '{s}', '{s}', ", .{ window.className.value, window.program.value });
+                    std.debug.print("'{s}'", .{window.title.value});
                     std.debug.print("   -   {}\n", .{window.rect});
                 }
             }
@@ -525,8 +539,7 @@ pub const Monitor = struct {
         }
     }
 
-    pub fn switchLayer(self: *Self, dstIndex: usize) void {
-        std.log.info("Switch to layer: {}", .{dstIndex});
+    pub fn switchLayer(self: *Self, dstIndex: usize, partOfBatch: bool) void {
         const newLayer = dstIndex;
         if (newLayer == self.currentLayer) return;
 
@@ -545,14 +558,17 @@ pub const Monitor = struct {
 
         self.currentLayer = dstIndex;
         self.currentWindow = 0;
-        self.focusCurrentWindow();
-        self.layoutWindows();
-        self.rerenderOverlay();
 
-        // Just for aesthetics, so the above windows will be show before
-        // the other windows get hidden, which prevents a short flicker.
-        // @todo: is there a better way to do this?
-        Sleep(30);
+        if (!partOfBatch) {
+            self.focusCurrentWindow();
+            self.layoutWindows();
+            self.rerenderOverlay();
+
+            // Just for aesthetics, so the above windows will be show before
+            // the other windows get hidden, which prevents a short flicker.
+            // @todo: is there a better way to do this?
+            Sleep(30);
+        }
 
         // Hide windows in the current layer except ones that are also on the target layer.
         for (fromLayer.windows.items) |*window| {

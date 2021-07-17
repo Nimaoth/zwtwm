@@ -59,6 +59,7 @@ pub const WindowManager = struct {
 
     // Settings
     ignoredClassNames: std.StringHashMap(bool),
+    ignoredTitles: std.StringHashMap(bool),
     ignoredPrograms: std.StringHashMap(IgnoredProgram),
     options: Options = .{
         .gap = 5,
@@ -131,6 +132,7 @@ pub const WindowManager = struct {
             .monitors = std.ArrayList(Monitor).init(allocator),
             .hotkeys = std.ArrayList(Hotkey).init(allocator),
             .ignoredClassNames = std.StringHashMap(bool).init(allocator),
+            .ignoredTitles = std.StringHashMap(bool).init(allocator),
             .ignoredPrograms = std.StringHashMap(IgnoredProgram).init(allocator),
             .windowData = std.AutoHashMap(HWND, WindowData).init(allocator),
 
@@ -165,6 +167,7 @@ pub const WindowManager = struct {
         self.monitors.deinit();
         self.hotkeys.deinit();
         self.ignoredClassNames.deinit();
+        self.ignoredTitles.deinit();
         self.ignoredPrograms.deinit();
     }
 
@@ -175,8 +178,17 @@ pub const WindowManager = struct {
         try self.ignoredClassNames.put("vguiPopupWindow", true);
         try self.ignoredClassNames.put("tooltips_class32", true);
         try self.ignoredClassNames.put("ForegroundStaging", true);
-        try self.ignoredPrograms.put("EpicGamesLauncher.exe", .{});
+        try self.ignoredClassNames.put("TaskManagerWindow", true);
+        try self.ignoredClassNames.put("Main HighGUI class", true);
 
+        // Ignore windows with empty titles.
+        try self.ignoredTitles.put("", true);
+
+        try self.ignoredPrograms.put("ScreenClippingHost.exe", .{});
+        try self.ignoredPrograms.put("PowerLauncher.exe", .{});
+        try self.ignoredPrograms.put("TextInputHost.exe", .{});
+        try self.ignoredPrograms.put("ShellExperienceHost.exe", .{});
+        try self.ignoredPrograms.put("EpicGamesLauncher.exe", .{});
         // Register hotkey to close window. (win+escape)
         if (RegisterHotKey(
             null, // @todo
@@ -201,71 +213,92 @@ pub const WindowManager = struct {
 
         const defaultHotkeys = [_]Hotkey{
             .{
-                .key = @intCast(u32, 'K'),
-                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
+                .key = @intCast(u32, 'Y'),
+                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 0, .SHIFT = 1, .NOREPEAT = 1 }),
                 .func = WindowManager.cmdDecreaseGap,
             },
             .{
-                .key = @intCast(u32, 'Q'),
-                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
+                .key = @intCast(u32, 'P'),
+                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 0, .SHIFT = 1, .NOREPEAT = 1 }),
                 .func = WindowManager.cmdIncreaseGap,
             },
 
             .{
-                .key = @intCast(u32, 'H'),
-                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
+                .key = @intCast(u32, 'Y'),
+                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 0, .NOREPEAT = 1 }),
                 .func = WindowManager.cmdDecreaseSplit,
             },
             .{
-                .key = @intCast(u32, 'F'),
-                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
+                .key = @intCast(u32, 'P'),
+                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 0, .NOREPEAT = 1 }),
                 .func = WindowManager.cmdIncreaseSplit,
             },
 
             .{
-                .key = @intCast(u32, 'N'),
-                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
+                .key = @intCast(u32, 'J'),
+                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 0, .NOREPEAT = 1 }),
                 .func = WindowManager.cmdSelectPrevWindow,
             },
             .{
-                .key = @intCast(u32, 'T'),
-                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
+                .key = @intCast(u32, 'L'),
+                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 0, .NOREPEAT = 1 }),
                 .func = WindowManager.cmdSelectNextWindow,
             },
 
             .{
-                .key = @intCast(u32, 'W'),
-                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
-                .func = WindowManager.cmdToggleForegroundWindowManaged,
-            },
-            .{
-                .key = @intCast(u32, 'C'),
-                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
-                .func = WindowManager.cmdMoveCurrentWindowToTop,
+                .key = @intCast(u32, 'J'),
+                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 0, .SHIFT = 1, .NOREPEAT = 1 }),
+                .func = WindowManager.cmdMoveWindowUp,
             },
             .{
                 .key = @intCast(u32, 'L'),
-                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
+                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 0, .SHIFT = 1, .NOREPEAT = 1 }),
+                .func = WindowManager.cmdMoveWindowDown,
+            },
+
+            .{
+                .key = @intCast(u32, 'X'),
+                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 0, .NOREPEAT = 1 }),
+                .func = WindowManager.cmdToggleForegroundWindowManaged,
+            },
+            .{
+                .key = @intCast(u32, 'K'),
+                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 0, .NOREPEAT = 1 }),
+                .func = WindowManager.cmdMoveCurrentWindowToTop,
+            },
+            .{
+                .key = @intCast(u32, 'M'),
+                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 0, .NOREPEAT = 1 }),
                 .func = WindowManager.cmdMoveNextWindowToLayer,
             },
             .{
-                .key = @intCast(u32, 'V'),
-                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
+                .key = @intCast(u32, 'N'),
+                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 0, .NOREPEAT = 1 }),
                 .func = WindowManager.cmdToggleNextWindowOnLayer,
             },
             .{
-                .key = @intCast(u32, 'X'),
-                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
+                .key = @intCast(u32, 'I'),
+                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 0, .NOREPEAT = 1 }),
                 .func = WindowManager.cmdToggleWindowFullscreen,
             },
             .{
                 .key = @intCast(u32, 'U'),
-                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
+                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 0, .SHIFT = 1, .NOREPEAT = 1 }),
+                .func = WindowManager.cmdMoveWindowToPrevMonitor,
+            },
+            .{
+                .key = @intCast(u32, 'O'),
+                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 0, .SHIFT = 1, .NOREPEAT = 1 }),
                 .func = WindowManager.cmdMoveWindowToNextMonitor,
             },
             .{
-                .key = @intCast(u32, 'I'),
-                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
+                .key = @intCast(u32, 'U'),
+                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 0, .NOREPEAT = 1 }),
+                .func = WindowManager.cmdGoToPrevMonitor,
+            },
+            .{
+                .key = @intCast(u32, 'O'),
+                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 0, .NOREPEAT = 1 }),
                 .func = WindowManager.cmdGoToNextMonitor,
             },
 
@@ -287,7 +320,19 @@ pub const WindowManager = struct {
                 .key = @intCast(u32, '1') + i,
                 .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .NOREPEAT = 1 }),
                 .func = WindowManager.cmdLayerCommand,
-                .args = .{ .usizeParam = @intCast(usize, i) },
+                .args = .{
+                    .usizeParam = @intCast(usize, i),
+                    .boolParam = false,
+                },
+            });
+            try self.registerHotkey(.{
+                .key = @intCast(u32, '1') + i,
+                .mods = HOT_KEY_MODIFIERS.initFlags(.{ .CONTROL = 1, .ALT = 1, .WIN = 1, .SHIFT = 1, .NOREPEAT = 1 }),
+                .func = WindowManager.cmdLayerCommand,
+                .args = .{
+                    .usizeParam = @intCast(usize, i),
+                    .boolParam = true,
+                },
             });
         }
     }
@@ -346,9 +391,6 @@ pub const WindowManager = struct {
 
         switch (event) {
             EVENT_OBJECT_SHOW => {
-                if (!std.mem.eql(u8, className.value, "CabinetWClass")) {
-                    return;
-                }
                 if (!self.isWindowManageable(hwnd)) {
                     return;
                 }
@@ -413,7 +455,7 @@ pub const WindowManager = struct {
                         const dstMonitor = self.getMonitor(dstHmonitor);
                         if (srcMonitor != dstMonitor) {
                             // Window was dragged onto a different monitor, manage id in that other monitor.
-                            self.moveWindowToMonitor(hwnd, srcMonitor, dstMonitor);
+                            self.moveWindowToMonitor(hwnd, srcMonitor, dstMonitor, null);
 
                             self.setCurrentMonitor(dstMonitor.hmonitor);
                             dstMonitor.setCurrentWindow(hwnd);
@@ -567,6 +609,7 @@ pub const WindowManager = struct {
                         hwnd,
                         oldMonitor,
                         newMonitor,
+                        null,
                     );
                 }
 
@@ -677,9 +720,6 @@ pub const WindowManager = struct {
         const className = getWindowString(hwnd, GetClassNameA, .{}, root.gWindowStringArena) catch return 1;
         defer className.deinit();
 
-        if (!std.mem.eql(u8, className.value, "CabinetWClass")) {
-            return 1;
-        }
         if (!self.isWindowManageable(hwnd)) {
             return 1;
         }
@@ -814,18 +854,8 @@ pub const WindowManager = struct {
 
         const className = getWindowString(hwnd, GetClassNameA, .{}, root.gWindowStringArena) catch return false;
         defer className.deinit();
-
-        if (getWindowExeName(hwnd, root.gWindowStringArena) catch null) |name| {
-            defer name.deinit();
-            if (self.ignoredPrograms.get(name.value)) |_| {
-                std.log.info("Window is not manageable because the program name is ignored: '{s}'", .{name.value});
-                return false;
-            }
-            std.log.info("Window exe name of {s}: {s}", .{ className.value, name.value });
-        } else {
-            //
-            std.log.err("Failed to get exe name from window {}: {s}", .{ hwnd, className.value });
-        }
+        var title = getWindowString(hwnd, GetWindowTextA, GetWindowTextLengthA, root.gWindowStringArena) catch return false;
+        defer title.deinit();
 
         const parent = GetParent(hwnd);
         const owner = GetWindow(hwnd, GW_OWNER);
@@ -838,6 +868,7 @@ pub const WindowManager = struct {
         if (false) {
             std.log.debug(
                 \\isManageable({}) class name = {s}
+                \\title:   '{s}'
                 \\parent:  {}
                 \\owner:   {}
                 \\style:   {}
@@ -845,7 +876,7 @@ pub const WindowManager = struct {
                 \\parentOk:{}
                 \\istool:  {}
                 \\isapp:   {}
-            , .{ hwnd, className.value, parent, owner, style, exstyle, parentOk, istool, isapp });
+            , .{ hwnd, className.value, title.value, parent, owner, style, exstyle, parentOk, istool, isapp });
         }
 
         if (style & @intCast(i32, @enumToInt(WS_DISABLED)) != 0) {
@@ -858,6 +889,22 @@ pub const WindowManager = struct {
         if (self.ignoredClassNames.get(className.value)) |_| {
             return false;
         }
+
+        if (self.ignoredTitles.get(title.value)) |_| {
+            return false;
+        }
+
+        if (getWindowExeName(hwnd, root.gWindowStringArena) catch null) |name| {
+            defer name.deinit();
+            if (self.ignoredPrograms.get(name.value)) |_| {
+                std.log.info("Window is not manageable because the program name is ignored: '{s}'", .{name.value});
+                return false;
+            }
+        } else {
+            //
+            std.log.err("Failed to get exe name from window {}: {s}", .{ hwnd, className.value });
+        }
+
         if ((parent == null and IsWindowVisible(hwnd) != 0) or parentOk) {
             if ((!istool and parent == null) or (istool and parentOk)) {
                 return true;
@@ -909,6 +956,7 @@ pub const WindowManager = struct {
     }
 
     fn manageWindow(self: *Self, hwnd: HWND, _preferredMonitor: ?*Monitor, index: ?usize) !*Monitor {
+        std.log.info("manageWindow({}, {})", .{ hwnd, index });
         try self.windowData.put(hwnd, .{
             .rect = try getWindowRect(hwnd),
         });
@@ -1029,14 +1077,14 @@ pub const WindowManager = struct {
         self.getCurrentMonitor().layoutWindows();
     }
 
-    fn moveWindowToMonitor(self: *Self, hwnd: HWND, srcMonitor: *Monitor, dstMonitor: *Monitor) void {
+    fn moveWindowToMonitor(self: *Self, hwnd: HWND, srcMonitor: *Monitor, dstMonitor: *Monitor, index: ?usize) void {
         if (srcMonitor == dstMonitor) return;
         if (!srcMonitor.isWindowManaged(hwnd)) return;
 
         var srcLayer = srcMonitor.getCurrentLayer();
         var dstLayer = dstMonitor.getCurrentLayer();
 
-        dstLayer.addWindow(hwnd, null) catch unreachable;
+        dstLayer.addWindow(hwnd, index) catch unreachable;
 
         // Completely remove window from source monitor
         // because having a window on two monitors doesn't make sense.
@@ -1105,7 +1153,18 @@ pub const WindowManager = struct {
     }
 
     fn cmdSwitchLayer(self: *Self, args: HotkeyArgs) void {
-        self.getCurrentMonitor().switchLayer(args.usizeParam);
+        std.log.info("cmdSwitchLayer({}, {})", .{ args.usizeParam, args.boolParam });
+        if (args.boolParam) {
+            for (self.monitors.items) |*monitor| {
+                monitor.switchLayer(args.usizeParam, true);
+            }
+
+            self.focusCurrentWindow();
+            self.layoutWindowsOnAllMonitors();
+            self.rerenderOverlay();
+        } else {
+            self.getCurrentMonitor().switchLayer(args.usizeParam, false);
+        }
     }
 
     fn cmdLayerCommand(self: *Self, args: HotkeyArgs) void {
@@ -1128,13 +1187,49 @@ pub const WindowManager = struct {
         self.nextCommand = .ToggleWindowOnLayer;
     }
 
+    fn cmdGoToPrevMonitor(self: *Self, args: HotkeyArgs) void {
+        std.log.info("cmdGoToPrevMonitor", .{});
+        if (self.monitors.items.len < 2) {
+            // Only zero/one monitor, nothing to do.
+            return;
+        }
+        self.currentMonitor = @mod(self.currentMonitor + self.monitors.items.len - 1, self.monitors.items.len);
+        self.getCurrentMonitor().focusCurrentWindow();
+        self.rerenderOverlay();
+    }
+
     fn cmdGoToNextMonitor(self: *Self, args: HotkeyArgs) void {
+        std.log.info("cmdGoToNextMonitor", .{});
         if (self.monitors.items.len < 2) {
             // Only zero/one monitor, nothing to do.
             return;
         }
         self.currentMonitor = @mod(self.currentMonitor + 1, self.monitors.items.len);
         self.getCurrentMonitor().focusCurrentWindow();
+        self.rerenderOverlay();
+    }
+
+    fn cmdMoveWindowToPrevMonitor(self: *Self, args: HotkeyArgs) void {
+        if (self.monitors.items.len < 2) {
+            // Only zero/one monitor, nothing to do.
+            return;
+        }
+
+        var srcMonitor = self.getCurrentMonitor();
+        var srcLayer = srcMonitor.getCurrentLayer();
+
+        const dstMonitorIndex = @mod(self.currentMonitor + self.monitors.items.len - 1, self.monitors.items.len);
+        var dstMonitor = &self.monitors.items[dstMonitorIndex];
+
+        if (srcMonitor.getCurrentWindow()) |window| {
+            self.moveWindowToMonitor(window.hwnd, srcMonitor, dstMonitor, 0);
+            dstMonitor.currentWindow = 0;
+        }
+
+        self.setCurrentMonitor(dstMonitor.hmonitor);
+        dstMonitor.focusCurrentWindow();
+        srcMonitor.layoutWindows();
+        dstMonitor.layoutWindows();
         self.rerenderOverlay();
     }
 
@@ -1151,10 +1246,12 @@ pub const WindowManager = struct {
         var dstMonitor = &self.monitors.items[dstMonitorIndex];
 
         if (srcMonitor.getCurrentWindow()) |window| {
-            self.moveWindowToMonitor(window.hwnd, srcMonitor, dstMonitor);
+            self.moveWindowToMonitor(window.hwnd, srcMonitor, dstMonitor, 0);
+            dstMonitor.currentWindow = 0;
         }
 
         self.setCurrentMonitor(dstMonitor.hmonitor);
+        dstMonitor.focusCurrentWindow();
         srcMonitor.layoutWindows();
         dstMonitor.layoutWindows();
         self.rerenderOverlay();
@@ -1193,6 +1290,20 @@ pub const WindowManager = struct {
         self.rerenderOverlay();
     }
 
+    fn cmdMoveWindowUp(self: *Self, args: HotkeyArgs) void {
+        self.getCurrentMonitor().moveCurrentWindowUp();
+        self.focusCurrentWindow();
+        self.layoutWindows();
+        self.rerenderOverlay();
+    }
+
+    fn cmdMoveWindowDown(self: *Self, args: HotkeyArgs) void {
+        self.getCurrentMonitor().moveCurrentWindowDown();
+        self.focusCurrentWindow();
+        self.layoutWindows();
+        self.rerenderOverlay();
+    }
+
     fn cmdPrintForegroundWindowInfo(self: *Self, args: HotkeyArgs) void {
         const hwnd = GetForegroundWindow();
         var className = getWindowString(hwnd, GetClassNameA, .{}, root.gWindowStringArena) catch return;
@@ -1200,6 +1311,10 @@ pub const WindowManager = struct {
 
         var title = getWindowString(hwnd, GetWindowTextA, GetWindowTextLengthA, root.gWindowStringArena) catch return;
         defer title.deinit();
+        std.log.notice(
+            "Window '{s}' '{s}' manageable: {}",
+            .{ title.value, className.value, self.isWindowManageable(hwnd) },
+        );
 
         if (getWindowExeName(hwnd, root.gWindowStringArena) catch null) |name| {
             defer name.deinit();

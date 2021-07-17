@@ -24,6 +24,7 @@ pub const Window = struct {
 
     hwnd: HWND,
     className: String,
+    program: String,
     title: String,
     rect: Rect,
     index: usize,
@@ -31,6 +32,7 @@ pub const Window = struct {
     fn deinit(self: *Self) void {
         self.className.deinit();
         self.title.deinit();
+        self.program.deinit();
     }
 };
 
@@ -96,20 +98,27 @@ pub const Layer = struct {
         var title = try getWindowString(hwnd, GetWindowTextA, GetWindowTextLengthA, root.gWindowStringArena);
         errdefer title.deinit();
 
+        var program = getWindowExeName(hwnd, root.gWindowStringArena) catch String{ .value = "<unknown>" };
+
         const rect: RECT = try getWindowRect(hwnd);
 
         if (index) |i| {
-            try self.windows.insert(i, .{
-                .hwnd = hwnd,
-                .className = className,
-                .title = title,
-                .rect = Rect.fromRECT(rect),
-                .index = i,
-            });
+            try self.windows.insert(
+                std.math.min(i, self.windows.items.len),
+                .{
+                    .hwnd = hwnd,
+                    .className = className,
+                    .program = program,
+                    .title = title,
+                    .rect = Rect.fromRECT(rect),
+                    .index = i,
+                },
+            );
         } else {
             try self.windows.append(.{
                 .hwnd = hwnd,
                 .className = className,
+                .program = program,
                 .title = title,
                 .rect = Rect.fromRECT(rect),
                 .index = self.windows.items.len,
