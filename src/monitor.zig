@@ -178,15 +178,15 @@ pub const Monitor = struct {
         return false;
     }
 
-    pub fn manageWindow(self: *Self, hwnd: HWND, onTop: bool) !void {
+    pub fn manageWindow(self: *Self, hwnd: HWND, index: ?usize) !void {
         if (self.isWindowManaged(hwnd)) {
             return;
         }
 
         var layer = self.getCurrentLayer();
-        try layer.addWindow(hwnd, onTop);
-        if (onTop) {
-            self.currentWindow = 0;
+        try layer.addWindow(hwnd, index);
+        if (index) |i| {
+            self.currentWindow = i;
         }
     }
 
@@ -210,16 +210,11 @@ pub const Monitor = struct {
     }
 
     pub fn setCurrentWindow(self: *Self, hwnd: HWND) void {
-        if (!self.isWindowManaged(hwnd)) {
-            return;
-        }
-
         const layer = self.getCurrentLayer();
-        if (!layer.containsWindow(hwnd)) {
-            return;
-        }
 
-        self.currentWindow = layer.getWindowIndex(hwnd).?;
+        if (layer.getWindowIndex(hwnd)) |index| {
+            self.currentWindow = index;
+        }
     }
 
     pub fn getLayer(self: *Self, index: usize) *Layer {
@@ -231,6 +226,10 @@ pub const Monitor = struct {
         return self.getLayer(self.currentLayer);
     }
 
+    pub fn getCurrentWindow(self: *Self) ?*Window {
+        return self.getCurrentLayer().getWindowAt(self.currentWindow);
+    }
+
     pub fn clampCurrentWindowIndex(self: *Self) void {
         const layer = self.getCurrentLayer();
         if (layer.windows.items.len == 0) {
@@ -240,7 +239,7 @@ pub const Monitor = struct {
         }
     }
 
-    pub fn selectPrevWindow(self: *Self, args: HotkeyArgs) void {
+    pub fn selectPrevWindow(self: *Self) void {
         const layer = self.getCurrentLayer();
         if (layer.windows.items.len == 0) {
             self.currentWindow = 0;
@@ -257,7 +256,7 @@ pub const Monitor = struct {
         self.rerenderOverlay();
     }
 
-    pub fn selectNextWindow(self: *Self, args: HotkeyArgs) void {
+    pub fn selectNextWindow(self: *Self) void {
         const layer = self.getCurrentLayer();
         if (layer.windows.items.len == 0) {
             self.currentWindow = 0;
@@ -273,13 +272,18 @@ pub const Monitor = struct {
         self.rerenderOverlay();
     }
 
-    pub fn moveCurrentWindowToTop(self: *Self, args: HotkeyArgs) void {
+    pub fn moveWindowToIndex(self: *Self, srcIndex: usize, dstIndex: usize) void {
         const layer = self.getCurrentLayer();
-        layer.moveWindowToTop(self.currentWindow);
-        self.currentWindow = 0;
-        self.focusCurrentWindow();
-        self.layoutWindows();
-        self.rerenderOverlay();
+        layer.moveWindowToIndex(srcIndex, dstIndex);
+        self.currentWindow = dstIndex;
+    }
+
+    pub fn moveCurrentWindowToTop(self: *Self) void {
+        self.moveWindowToIndex(self.currentWindow, 0);
+    }
+
+    pub fn moveCurrentWindowToIndex(self: *Self, index: usize) void {
+        self.moveWindowToIndex(self.currentWindow, index);
     }
 
     pub fn focusCurrentWindow(self: *Self) void {
@@ -303,8 +307,7 @@ pub const Monitor = struct {
         var monitor = self.workingArea;
 
         if (root.ONLY_USE_HALF_MONITOR) {
-            monitor.width = @divTrunc(monitor.width, 2) - 1;
-            monitor.x += monitor.width + 2;
+            monitor.left = @divTrunc(monitor.left + monitor.right, 2);
         }
 
         var layer = self.getCurrentLayer();
@@ -459,17 +462,30 @@ pub const Monitor = struct {
         }
     }
 
+    pub fn updateAllWindowVisibilities(self: *Self) void {
+        const currentLayer = self.getCurrentLayer();
+        for (self.layers.items) |*layer| {
+            for (layer.windows.items) |*window| {
+                if (layer == currentLayer) {
+                    setWindowVisibility(window.hwnd, true);
+                } else if (!currentLayer.containsWindow(window.hwnd)) {
+                    setWindowVisibility(window.hwnd, false);
+                }
+            }
+        }
+    }
+
     pub fn updateWindowVisibility(self: *Self, hwnd: HWND) void {
         setWindowVisibility(hwnd, self.getCurrentLayer().containsWindow(hwnd));
     }
 
-    pub fn moveCurrentWindowToLayer(self: *Self, args: HotkeyArgs) void {
-        std.log.info("Move current window to layer: {}", .{args.usizeParam});
-        const newLayer = args.usizeParam;
+    pub fn moveCurrentWindowToLayer(self: *Self, dstIndex: usize) void {
+        std.log.info("Move current window to layer: {}", .{dstIndex});
+        const newLayer = dstIndex;
         if (newLayer == self.currentLayer) return;
 
         if (newLayer < 0 or newLayer >= self.layers.items.len) {
-            std.log.err("Can't move window to layer {}: outside of range", .{args.usizeParam});
+            std.log.err("Can't move window to layer {}: outside of range", .{dstIndex});
             return;
         }
 
@@ -477,7 +493,7 @@ pub const Monitor = struct {
         var toLayer = self.getLayer(@intCast(usize, newLayer));
 
         if (fromLayer.getWindowAt(self.currentWindow)) |window| {
-            toLayer.addWindow(window.hwnd, false) catch unreachable;
+            toLayer.addWindow(window.hwnd, null) catch unreachable;
             _ = fromLayer.removeWindow(window.hwnd);
             setWindowVisibility(window.hwnd, false);
         }
@@ -488,40 +504,55 @@ pub const Monitor = struct {
         self.rerenderOverlay();
     }
 
-    pub fn toggleCurrentWindowOnLayer(self: *Self, args: HotkeyArgs) void {
-        std.log.info("Toggle current window on layer: {}", .{args.usizeParam});
-        const newLayer = args.usizeParam;
-        if (newLayer == self.currentLayer) return;
+    pub fn toggleCurrentWindowOnLayer(self: *Self, dstIndex: usize) void {
+        std.log.info("Toggle current window on layer: {}", .{dstIndex});
+        if (dstIndex == self.currentLayer) return;
 
-        if (newLayer < 0 or newLayer >= self.layers.items.len) {
-            std.log.err("Layer {}: outside of range", .{args.usizeParam});
+        if (dstIndex < 0 or dstIndex >= self.layers.items.len) {
+            std.log.err("Layer {}: outside of range", .{dstIndex});
             return;
         }
 
         var layer = self.getCurrentLayer();
-        var toLayer = self.getLayer(@intCast(usize, newLayer));
+        var toLayer = self.getLayer(dstIndex);
 
         if (layer.getWindowAt(self.currentWindow)) |window| {
             if (toLayer.containsWindow(window.hwnd)) {
                 _ = toLayer.removeWindow(window.hwnd);
             } else {
-                toLayer.addWindow(window.hwnd, false) catch unreachable;
+                toLayer.addWindow(window.hwnd, null) catch unreachable;
             }
         }
     }
 
-    pub fn switchLayer(self: *Self, args: HotkeyArgs) void {
-        std.log.info("Switch to layer: {}", .{args.usizeParam});
-        const newLayer = args.usizeParam;
+    pub fn switchLayer(self: *Self, dstIndex: usize) void {
+        std.log.info("Switch to layer: {}", .{dstIndex});
+        const newLayer = dstIndex;
         if (newLayer == self.currentLayer) return;
 
         if (newLayer < 0 or newLayer >= self.layers.items.len) {
-            std.log.err("Can't switch to layer {}: outside of range", .{args.usizeParam});
+            std.log.err("Can't switch to layer {}: outside of range", .{dstIndex});
             return;
         }
 
         var fromLayer = self.getCurrentLayer();
         var toLayer = self.getLayer(@intCast(usize, newLayer));
+
+        for (toLayer.windows.items) |*window| {
+            // This doesn't do anything if the window is already visible.
+            setWindowVisibility(window.hwnd, true);
+        }
+
+        self.currentLayer = dstIndex;
+        self.currentWindow = 0;
+        self.focusCurrentWindow();
+        self.layoutWindows();
+        self.rerenderOverlay();
+
+        // Just for aesthetics, so the above windows will be show before
+        // the other windows get hidden, which prevents a short flicker.
+        // @todo: is there a better way to do this?
+        Sleep(30);
 
         // Hide windows in the current layer except ones that are also on the target layer.
         for (fromLayer.windows.items) |*window| {
@@ -529,23 +560,41 @@ pub const Monitor = struct {
                 setWindowVisibility(window.hwnd, false);
             }
         }
-
-        for (toLayer.windows.items) |*window| {
-            // This doesn't do anything if the window is already visible.
-            setWindowVisibility(window.hwnd, true);
-        }
-
-        self.currentLayer = args.usizeParam;
-        self.currentWindow = 0;
-        self.focusCurrentWindow();
-        self.layoutWindows();
-        self.rerenderOverlay();
     }
 
-    pub fn toggleWindowFullscreen(self: *Self, args: HotkeyArgs) void {
+    pub fn toggleWindowFullscreen(self: *Self) void {
         var layer = self.getCurrentLayer();
         layer.fullscreen = !layer.fullscreen;
         self.layoutWindows();
         self.rerenderOverlay();
+    }
+
+    pub fn getWindowIndexContainingPoint(self: *Self, point: POINT, excludeHwnd: ?HWND) ?usize {
+        for (self.getCurrentLayer().windows.items) |window, index| {
+            if (window.hwnd == excludeHwnd) continue;
+
+            if (getWindowRect(window.hwnd) catch null) |rect| {
+                if (rectContainsPoint(rect, point)) {
+                    return index;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    pub fn getWindowContainingPoint(self: *Self, point: POINT, excludeHwnd: ?HWND) ?*Window {
+        if (self.getWindowIndexContainingPoint(point, excludeHwnd)) |index| {
+            return self.getCurrentLayer().getWindowAt(index);
+        }
+        return null;
+    }
+
+    pub fn isPointOnMonitor(self: *Self, point: POINT) bool {
+        return rectContainsPoint(self.rect, point);
+    }
+
+    pub fn isPointInWorkingArea(self: *Self, point: POINT) bool {
+        return rectContainsPoint(self.workingArea, point);
     }
 };

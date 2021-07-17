@@ -77,35 +77,43 @@ pub fn getWindowString(hwnd: HWND, comptime func: anytype, comptime lengthFunc: 
         return String{ .value = str, .allocator = allocator };
     }
 }
-
 pub fn getWindowExeName(hwnd: HWND, allocator: *std.mem.Allocator) !String {
+    var path = try getWindowExePath(hwnd, allocator);
+    path.value = std.fs.path.basename(path.value);
+    return path;
+}
+
+pub fn getWindowExePath(hwnd: HWND, allocator: *std.mem.Allocator) !String {
     var dwProcId: u32 = 0;
-    _ = GetWindowThreadProcessId(hwnd, &dwProcId);
+    const threadId = GetWindowThreadProcessId(hwnd, &dwProcId);
     const hProc = OpenProcess(PROCESS_ACCESS_RIGHTS.initFlags(.{
         .QUERY_INFORMATION = 1,
         .VM_READ = 1,
     }), 0, dwProcId);
-    defer _ = CloseHandle(hProc);
 
-    var buffer: []u8 = try allocator.alloc(u8, 260);
-    errdefer allocator.free(buffer);
+    if (hProc) |hproc| {
+        defer _ = CloseHandle(hproc);
 
-    const len = GetModuleFileNameA(
-        @ptrCast(HINSTANCE, hProc),
-        @ptrCast([*:0]u8, buffer.ptr),
-        @intCast(u32, buffer.len),
-    );
-    //const len = GetWindowModuleFileNameA(
-    //    hwnd,
-    //    @ptrCast([*:0]u8, buffer.ptr),
-    //    @intCast(u32, buffer.len),
-    //);
-    if (len == 0) {
-        return error.FailedToGetProcessName;
+        var buffer: []u8 = try allocator.alloc(u8, 260);
+        errdefer allocator.free(buffer);
+
+        const len = K32GetModuleFileNameExA(
+            hproc,
+            null,
+            @ptrCast([*:0]u8, buffer.ptr),
+            @intCast(u32, buffer.len),
+        );
+        if (len == 0) {
+            std.log.err("Failed to get process name {}: {}", .{ dwProcId, GetLastError() });
+            return error.FailedToGetProcessName;
+        }
+
+        const str = buffer[0..len];
+        return String{ .value = str, .allocator = allocator };
+    } else {
+        std.log.err("Failed to open process {}: {}", .{ dwProcId, GetLastError() });
+        return error.FailedToOpenProcess;
     }
-
-    const str = buffer[0..len];
-    return String{ .value = str, .allocator = allocator };
 }
 
 pub fn getMonitorRect() !Rect {
@@ -148,11 +156,8 @@ pub fn getRectWithoutBorder(hwnd: HWND, rect: Rect) Rect {
 }
 
 pub fn getBorderThickness(hwnd: HWND) !RECT {
-    var rect: RECT = undefined;
+    const rect: RECT = try getWindowRect(hwnd);
     var frame: RECT = undefined;
-    if (GetWindowRect(hwnd, &rect) == 0) {
-        return error.FailedToGetWindowRect;
-    }
     if (DwmGetWindowAttribute(
         hwnd,
         @enumToInt(DWMWA_EXTENDED_FRAME_BOUNDS),
@@ -195,8 +200,7 @@ pub fn setWindowVisibility(hwnd: HWND, shouldBeVisible: bool) void {
 
 pub fn screenToClient(hwnd: HWND, rect: RECT) RECT {
     if (true) {
-        var overlayRect: RECT = undefined;
-        _ = GetWindowRect(hwnd, &overlayRect);
+        const overlayRect: RECT = getWindowRect(hwnd) catch return rect;
 
         return RECT{
             .left = rect.left - overlayRect.left,
@@ -219,4 +223,25 @@ pub fn screenToClient(hwnd: HWND, rect: RECT) RECT {
 
         return rect;
     }
+}
+
+pub fn getWindowRect(hwnd: HWND) !RECT {
+    var rect: RECT = undefined;
+    if (GetWindowRect(hwnd, &rect) == 0) {
+        return error.FailedToGetWindowRect;
+    }
+    return rect;
+}
+
+pub fn getCursorPos() !POINT {
+    var cursorPos: POINT = undefined;
+    if (GetCursorPos(&cursorPos) == 0) {
+        return error.FailedToGetCursorPos;
+    }
+
+    return cursorPos;
+}
+
+pub fn rectContainsPoint(rect: RECT, point: POINT) bool {
+    return point.x >= rect.left and point.x <= rect.right and point.y >= rect.top and point.y <= rect.bottom;
 }

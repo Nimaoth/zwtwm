@@ -50,6 +50,11 @@ pub fn main() anyerror!void {
 
 fn ConsoleCtrlHandler(CtrlType: u32) callconv(@import("std").os.windows.WINAPI) BOOL {
     std.log.debug("ConsoleCtrlHandler: {}", .{CtrlType});
+
+    gWindowManager.writeWindowInfosToFile() catch |err| {
+        std.log.err("Failed to save window data in file: {}", .{err});
+    };
+
     // @todo: handle thread synchronization.
     std.log.info("Make all managed windows visible again.", .{});
     for (gWindowManager.monitors.items) |*monitor| {

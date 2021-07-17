@@ -26,6 +26,7 @@ pub const Window = struct {
     className: String,
     title: String,
     rect: Rect,
+    index: usize,
 
     fn deinit(self: *Self) void {
         self.className.deinit();
@@ -84,7 +85,7 @@ pub const Layer = struct {
         return std.math.maxInt(usize);
     }
 
-    pub fn addWindow(self: *Self, hwnd: HWND, onTop: bool) !void {
+    pub fn addWindow(self: *Self, hwnd: HWND, index: ?usize) !void {
         if (self.containsWindow(hwnd)) {
             return;
         }
@@ -95,15 +96,15 @@ pub const Layer = struct {
         var title = try getWindowString(hwnd, GetWindowTextA, GetWindowTextLengthA, root.gWindowStringArena);
         errdefer title.deinit();
 
-        var rect: RECT = undefined;
-        _ = GetWindowRect(hwnd, &rect);
+        const rect: RECT = try getWindowRect(hwnd);
 
-        if (onTop) {
-            try self.windows.insert(0, .{
+        if (index) |i| {
+            try self.windows.insert(i, .{
                 .hwnd = hwnd,
                 .className = className,
                 .title = title,
                 .rect = Rect.fromRECT(rect),
+                .index = i,
             });
         } else {
             try self.windows.append(.{
@@ -111,6 +112,7 @@ pub const Layer = struct {
                 .className = className,
                 .title = title,
                 .rect = Rect.fromRECT(rect),
+                .index = self.windows.items.len,
             });
         }
     }
@@ -132,11 +134,23 @@ pub const Layer = struct {
         return null;
     }
 
-    pub fn moveWindowToTop(self: *Self, index: usize) void {
-        if (index == 0 or index >= self.windows.items.len) {
+    pub fn moveWindowToIndex(self: *Self, srcIndex: usize, dstIndex: usize) void {
+        if (srcIndex == dstIndex or srcIndex >= self.windows.items.len or dstIndex >= self.windows.items.len) {
             return;
         }
-        const temp = self.windows.orderedRemove(index);
-        self.windows.insert(0, temp) catch unreachable;
+        const temp = self.windows.orderedRemove(srcIndex);
+        self.windows.insert(dstIndex, temp) catch unreachable;
+    }
+
+    pub fn moveWindowToTop(self: *Self, index: usize) void {
+        self.moveWindowToIndex(index, 0);
+    }
+
+    pub fn sortWindows(self: *Self) void {
+        std.sort.sort(Window, self.windows.items, self, Self.compareWindowIndex);
+    }
+
+    fn compareWindowIndex(context: *Self, a: Window, b: Window) bool {
+        return a.index < b.index;
     }
 };
