@@ -18,6 +18,7 @@ Some settings/keybindings can be changed in config.json, which must be in the sa
 ## Default keybindings
 | Key               | Function    |
 | -----------       | ----------- |
+| Win+Escape        | Terminate zwtwm (Can't be changed at the moment). |
 | Ctrl+Alt+J        | Select previous window on current monitor. |
 | Ctrl+Alt+L        | Select next window on current monitor. |
 | Ctrl+Alt+Shift+J  | Move current window top previous slot. |
