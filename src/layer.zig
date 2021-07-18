@@ -26,7 +26,7 @@ pub const Window = struct {
     className: String,
     program: String,
     title: String,
-    rect: Rect,
+    rect: RECT,
     index: usize,
 
     fn deinit(self: *Self) void {
@@ -100,7 +100,7 @@ pub const Layer = struct {
 
         var program = getWindowExeName(hwnd, root.gWindowStringArena) catch String{ .value = "<unknown>" };
 
-        const rect: RECT = try getWindowRect(hwnd);
+        const rect = try getWindowRect(hwnd);
 
         if (index) |i| {
             try self.windows.insert(
@@ -110,7 +110,7 @@ pub const Layer = struct {
                     .className = className,
                     .program = program,
                     .title = title,
-                    .rect = Rect.fromRECT(rect),
+                    .rect = rect,
                     .index = i,
                 },
             );
@@ -120,7 +120,7 @@ pub const Layer = struct {
                 .className = className,
                 .program = program,
                 .title = title,
-                .rect = Rect.fromRECT(rect),
+                .rect = rect,
                 .index = self.windows.items.len,
             });
         }

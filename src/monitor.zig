@@ -315,11 +315,11 @@ pub const Monitor = struct {
         var gap = self.windowManager.config.gap;
         var splitRatio = self.windowManager.config.splitRatio;
 
-        var area = Rect{
-            .x = monitor.left + gap,
-            .y = monitor.top + gap,
-            .width = monitor.right - monitor.left - gap * 2,
-            .height = monitor.bottom - monitor.top - gap * 2,
+        var area = RECT{
+            .left = monitor.left + gap,
+            .top = monitor.top + gap,
+            .right = monitor.right - gap,
+            .bottom = monitor.bottom - gap,
         };
 
         const numWindows: i32 = @intCast(i32, layer.windows.items.len);
@@ -338,10 +338,10 @@ pub const Monitor = struct {
                 if (SetWindowPos(
                     window.hwnd,
                     null,
-                    visualRect.x,
-                    visualRect.y,
-                    visualRect.width,
-                    visualRect.height,
+                    visualRect.left,
+                    visualRect.top,
+                    visualRect.right - visualRect.left,
+                    visualRect.bottom - visualRect.top,
                     SET_WINDOW_POS_FLAGS.initFlags(.{}),
                 ) == 0) {
                     std.log.err("Failed to set window position of {}", .{window.hwnd});
@@ -352,7 +352,7 @@ pub const Monitor = struct {
                     return;
                 }
 
-                var x: i32 = area.x;
+                var x: i32 = area.left;
                 for (layer.windows.items) |*window, i| {
                     if (isWindowMaximized(window.hwnd) catch false) {
                         std.log.debug("Restoring window because it is maximized: {}", .{window.hwnd});
@@ -365,18 +365,16 @@ pub const Monitor = struct {
                         const horizontalOrVertical = if (root.ONLY_USE_HALF_MONITOR) 1 else 0;
                         if (@mod(i, 2) == horizontalOrVertical) {
                             const ratio = if (i == 0) splitRatio else 0.5;
-                            const split = @floatToInt(i32, @intToFloat(f64, windowArea.width) * ratio);
+                            const split = @floatToInt(i32, @intToFloat(f64, windowArea.right - windowArea.left) * ratio);
 
-                            area.x += split + gap;
-                            area.width -= split + gap;
-                            windowArea.width = split;
+                            area.left += split + gap;
+                            windowArea.right = windowArea.left + split;
                         } else {
                             const ratio = if (i == 0) splitRatio else 0.5;
-                            const split = @floatToInt(i32, @intToFloat(f64, windowArea.height) * ratio);
+                            const split = @floatToInt(i32, @intToFloat(f64, windowArea.bottom - windowArea.top) * ratio);
 
-                            area.y += split + gap;
-                            area.height -= split + gap;
-                            windowArea.height = split;
+                            area.top += split + gap;
+                            windowArea.bottom = windowArea.top + split;
                         }
                     }
 
@@ -387,10 +385,10 @@ pub const Monitor = struct {
                         hdwp,
                         window.hwnd,
                         null,
-                        visualRect.x,
-                        visualRect.y,
-                        visualRect.width,
-                        visualRect.height,
+                        visualRect.left,
+                        visualRect.top,
+                        visualRect.right - visualRect.left,
+                        visualRect.bottom - visualRect.top,
                         SET_WINDOW_POS_FLAGS.initFlags(.{
                             .NOOWNERZORDER = 1,
                             .SHOWWINDOW = 1,
@@ -443,19 +441,19 @@ pub const Monitor = struct {
             var monitorRect = if (convertToClient) screenToClient(self.overlayWindow, self.rect) else self.rect;
             //std.log.debug("renderOverlay({}, {}):\nregion:   {}\nmonitor1: {}\nmonitor2: {}", .{ isCurrent, convertToClient, region, self.rect, monitorRect });
             while (j < 1) : (j += 1) {
-                const winRect2 = Rect.fromRECT(monitorRect).expand(-j).toRECT();
+                const winRect2 = expand(monitorRect, -j);
                 _ = FrameRect(hdc, &winRect2, brushCurrentMonitor);
             }
 
             for (layer.windows.items) |*window, i| {
-                const winRect = if (convertToClient) Rect.fromRECT(screenToClient(self.overlayWindow, window.rect.toRECT())) else window.rect;
+                const winRect = if (convertToClient) screenToClient(self.overlayWindow, window.rect) else window.rect;
 
                 if (i == self.currentWindow) {
                     const brush = if (window.hwnd == GetForegroundWindow()) brushFocused else brushUnfocused;
 
                     var k: i32 = 0;
                     while (k < 2) : (k += 1) {
-                        const winRect2 = winRect.expand(-k).toRECT();
+                        const winRect2 = expand(winRect, -k);
                         _ = FrameRect(hdc, &winRect2, brush);
                     }
                 }

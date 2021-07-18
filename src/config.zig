@@ -63,6 +63,8 @@ pub const Config = struct {
 
     hotkeys: std.ArrayList(Hotkey),
 
+    loadedConfig: ?ConfigJson = null,
+
     pub fn init(allocator: *std.mem.Allocator) !Self {
         var ignoredClasses = std.StringHashMap(IgnoredProgram).init(allocator);
         var ignoredTitles = std.StringHashMap(IgnoredProgram).init(allocator);
@@ -102,6 +104,15 @@ pub const Config = struct {
         self.ignoredClasses.deinit();
         self.ignoredTitles.deinit();
         self.ignoredPrograms.deinit();
+        self.hotkeys.deinit();
+        self.commands.deinit();
+
+        if (self.loadedConfig) |config| {
+            const options = std.json.ParseOptions{
+                .allocator = self.allocator,
+            };
+            std.json.parseFree(ConfigJson, config, options);
+        }
     }
 
     pub fn addCommand(self: *Self, name: []const u8, func: fn (*root.WindowManager, HotkeyArgs) void) !void {
@@ -123,30 +134,28 @@ pub const Config = struct {
         const options = std.json.ParseOptions{
             .allocator = self.allocator,
         };
-        const TypeToParse = ConfigJson;
-        const config = try std.json.parse(TypeToParse, &tokenStream, options);
-        defer std.json.parseFree(TypeToParse, config, options);
+        self.loadedConfig = try std.json.parse(ConfigJson, &tokenStream, options);
 
         // Copy fields.
-        self.gap = config.gap;
-        self.splitRatio = config.splitRatio;
-        self.wrapMonitors = config.wrapMonitors;
-        self.wrapWindows = config.wrapWindows;
+        self.gap = self.loadedConfig.?.gap;
+        self.splitRatio = self.loadedConfig.?.splitRatio;
+        self.wrapMonitors = self.loadedConfig.?.wrapMonitors;
+        self.wrapWindows = self.loadedConfig.?.wrapWindows;
 
-        for (config.ignoredPrograms) |name| {
+        for (self.loadedConfig.?.ignoredPrograms) |name| {
             try self.ignoredPrograms.put(name, .{});
         }
 
-        for (config.ignoredClasses) |name| {
+        for (self.loadedConfig.?.ignoredClasses) |name| {
             try self.ignoredClasses.put(name, .{});
         }
 
-        for (config.ignoredTitles) |name| {
+        for (self.loadedConfig.?.ignoredTitles) |name| {
             try self.ignoredTitles.put(name, .{});
         }
 
         // Get hotkeys
-        hotkeyLoop: for (config.hotkeys) |*hotkey| {
+        hotkeyLoop: for (self.loadedConfig.?.hotkeys) |*hotkey| {
             var key: ?u32 = 0;
             var mods = HOT_KEY_MODIFIERS.initFlags(.{});
 
@@ -240,59 +249,5 @@ pub const Config = struct {
                 .args = args,
             });
         }
-    }
-
-    pub fn saveToFile(self: *Self, filename: []const u8) !void {
-        //std.log.info("Saving config to '{s}'", .{filename});
-
-        //var file = try std.fs.cwd().createFile(filename, .{ .truncate = true });
-        //defer file.close();
-
-        //var jw = std.json.writeStream(file.writer(), 10);
-        //try jw.beginArray();
-
-        //// Collect all windows.
-        //var allWindows = std.AutoHashMap(HWND, *Monitor).init(self.allocator);
-        //defer allWindows.deinit();
-        //for (self.monitors.items) |*monitor| {
-        //    for (monitor.layers.items) |*layer| {
-        //        for (layer.windows.items) |*window| {
-        //            try allWindows.put(window.hwnd, monitor);
-        //        }
-        //    }
-        //}
-
-        //for (self.monitors.items) |*monitor, monitorIndex| {
-        //    var iter = allWindows.iterator();
-        //    while (iter.next()) |entry| {
-        //        if (entry.value != monitor) continue;
-
-        //        const hwnd = entry.key;
-        //        try jw.arrayElem();
-        //        try jw.beginObject();
-
-        //        try jw.objectField("hwnd");
-        //        try jw.emitNumber(@ptrToInt(hwnd));
-
-        //        try jw.objectField("monitor");
-        //        try jw.emitNumber(monitorIndex);
-
-        //        try jw.objectField("layers");
-        //        try jw.beginArray();
-        //        for (monitor.layers.items) |*layer| {
-        //            try jw.arrayElem();
-        //            if (layer.getWindowIndex(hwnd)) |index| {
-        //                try jw.emitNumber(index);
-        //            } else {
-        //                try jw.emitNumber(-1);
-        //            }
-        //        }
-        //        try jw.endArray();
-
-        //        try jw.endObject();
-        //    }
-        //}
-
-        //try jw.endArray();
     }
 };

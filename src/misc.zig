@@ -13,41 +13,14 @@ pub const String = struct {
     }
 };
 
-pub const Rect = struct {
-    const Self = @This();
-
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-
-    pub fn fromRECT(rect: RECT) Self {
-        return Self{
-            .x = rect.left,
-            .y = rect.top,
-            .width = rect.right - rect.left,
-            .height = rect.bottom - rect.top,
-        };
-    }
-
-    pub fn toRECT(self: Self) RECT {
-        return RECT{
-            .left = self.x,
-            .top = self.y,
-            .right = self.x + self.width,
-            .bottom = self.y + self.height,
-        };
-    }
-
-    pub fn expand(self: Self, amount: i32) Self {
-        return Self{
-            .x = self.x - amount,
-            .y = self.y - amount,
-            .width = self.width + amount + amount,
-            .height = self.height + amount + amount,
-        };
-    }
-};
+pub fn expand(self: RECT, amount: i32) RECT {
+    return RECT{
+        .left = self.left - amount,
+        .top = self.top - amount,
+        .right = self.right + amount,
+        .bottom = self.bottom + amount,
+    };
+}
 
 pub fn rgb(r: u8, g: u8, b: u8) u32 {
     return @intCast(u32, r) | (@intCast(u32, g) << 8) | (@intCast(u32, b) << 16);
@@ -116,7 +89,7 @@ pub fn getWindowExePath(hwnd: HWND, allocator: *std.mem.Allocator) !String {
     }
 }
 
-pub fn getMonitorRect() !Rect {
+pub fn getMonitorRect() !RECT {
     var rect: RECT = undefined;
     if (SystemParametersInfoA(
         .GETWORKAREA,
@@ -126,12 +99,7 @@ pub fn getMonitorRect() !Rect {
     ) == 0) {
         return error.SystemParametersInfo;
     }
-    return Rect{
-        .x = rect.left,
-        .y = rect.top,
-        .width = rect.right - rect.left,
-        .height = rect.bottom - rect.top,
-    };
+    return rect;
 }
 
 pub fn isWindowMaximized(hwnd: HWND) !bool {
@@ -143,16 +111,14 @@ pub fn isWindowMaximized(hwnd: HWND) !bool {
     return placement.showCmd == .MAXIMIZE;
 }
 
-pub fn getRectWithoutBorder(hwnd: HWND, rect: Rect) Rect {
+pub fn getRectWithoutBorder(hwnd: HWND, rect: RECT) RECT {
     const border = getBorderThickness(hwnd) catch return rect;
-    const newRect = Rect{
-        .x = rect.x - border.left,
-        .y = rect.y - border.top,
-        .width = rect.width + border.left + border.right,
-        .height = rect.height + border.top + border.bottom,
+    return RECT{
+        .left = rect.left - border.left,
+        .top = rect.top - border.top,
+        .right = rect.right + border.right,
+        .bottom = rect.bottom + border.bottom,
     };
-    //std.log.debug("\nrect: {}\nbord: {}\n new: {}", .{ rect, border, newRect });
-    return newRect;
 }
 
 pub fn getBorderThickness(hwnd: HWND) !RECT {

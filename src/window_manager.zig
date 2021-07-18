@@ -300,7 +300,7 @@ pub const WindowManager = struct {
                 if (self.isWindowManaged(hwnd)) {
                     if (self.getWindow(hwnd)) |window| {
                         if (getWindowRect(hwnd) catch null) |rect| {
-                            window.rect = Rect.fromRECT(rect);
+                            window.rect = rect;
                             self.rerenderOverlay();
                         }
                     }

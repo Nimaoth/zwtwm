@@ -6,6 +6,7 @@
         "TextInputHost.exe",
         "ShellExperienceHost.exe",
         "EpicGamesLauncher.exe",
+        "SystemSettings.exe",
         "ApplicationFrameHost.exe"
     ],
 
@@ -27,7 +28,7 @@
     "gap": 5,
     "splitRatio": 0.6,
     "wrapMonitors": false,
-    "wrapWindows": false,
+    "wrapWindows": true,
 
     "hotkeys": [
         {
