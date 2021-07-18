@@ -1,0 +1,275 @@
+{
+
+    "ignoredPrograms": [
+        "ScreenClippingHost.exe",
+        "PowerLauncher.exe",
+        "TextInputHost.exe",
+        "ShellExperienceHost.exe",
+        "EpicGamesLauncher.exe",
+        "ApplicationFrameHost.exe"
+    ],
+
+    "ignoredClasses": [
+        "IME",
+        "MSCTFIME UI",
+        "WorkerW",
+        "vguiPopupWindow",
+        "tooltips_class32",
+        "ForegroundStaging",
+        "TaskManagerWindow",
+        "Main HighGUI class"
+    ],
+
+    "ignoredTitles": [
+        ""
+    ],
+
+    "gap": 5,
+    "splitRatio": 0.6,
+    "wrapMonitors": false,
+    "wrapWindows": false,
+
+    "hotkeys": [
+        {
+            "key": "ctrl alt shift Y",
+            "command": "decreaseGap"
+        },
+        {
+            "key": "ctrl alt shift P",
+            "command": "increaseGap"
+        },
+
+        {
+            "key": "ctrl alt Y",
+            "command": "decreaseSplit"
+        },
+        {
+            "key": "ctrl alt P",
+            "command": "increaseSplit"
+        },
+
+        {
+            "key": "ctrl alt J",
+            "command": "selectPrevWindow"
+        },
+        {
+            "key": "ctrl alt L",
+            "command": "selectNextWindow"
+        },
+
+        {
+            "key": "ctrl alt shift J",
+            "command": "moveWindowUp"
+        },
+        {
+            "key": "ctrl alt shift L",
+            "command": "moveWindowDown"
+        },
+
+        {
+            "key": "ctrl alt X",
+            "command": "toggleForegroundWindowManaged"
+        },
+        {
+            "key": "ctrl alt K",
+            "command": "moveCurrentWindowToTop"
+        },
+        {
+            "key": "ctrl alt M",
+            "command": "moveNextWindowToLayer"
+        },
+        {
+            "key": "ctrl alt N",
+            "command": "toggleNextWindowOnLayer"
+        },
+        {
+            "key": "ctrl alt I",
+            "command": "toggleWindowFullscreen"
+        },
+
+        {
+            "key": "ctrl alt shift O",
+            "command": "moveWindowToPrevMonitor"
+        },
+        {
+            "key": "ctrl alt shift U",
+            "command": "moveWindowToNextMonitor"
+        },
+
+        {
+            "key": "ctrl alt O",
+            "command": "goToPrevMonitor"
+        },
+        {
+            "key": "ctrl alt U",
+            "command": "goToNextMonitor"
+        },
+
+        {
+            "key": "ctrl alt shift G",
+            "command": "printForegroundWindowInfo"
+        },
+
+        {
+            "key": "ctrl alt win 1",
+            "command": "layerCommand",
+            "args": {
+                "usizeParam": 0,
+                "boolParam": false
+            }
+        },
+        {
+            "key": "ctrl alt win 2",
+            "command": "layerCommand",
+            "args": {
+                "usizeParam": 1,
+                "boolParam": false
+            }
+        },
+        {
+            "key": "ctrl alt win 3",
+            "command": "layerCommand",
+            "args": {
+                "usizeParam": 2,
+                "boolParam": false
+            }
+        },
+        {
+            "key": "ctrl alt win 4",
+            "command": "layerCommand",
+            "args": {
+                "usizeParam": 3,
+                "boolParam": false
+            }
+        },
+        {
+            "key": "ctrl alt win 5",
+            "command": "layerCommand",
+            "args": {
+                "usizeParam": 4,
+                "boolParam": false
+            }
+        },
+        {
+            "key": "ctrl alt win 6",
+            "command": "layerCommand",
+            "args": {
+                "usizeParam": 5,
+                "boolParam": false
+            }
+        },
+        {
+            "key": "ctrl alt win 7",
+            "command": "layerCommand",
+            "args": {
+                "usizeParam": 6,
+                "boolParam": false
+            }
+        },
+        {
+            "key": "ctrl alt win 8",
+            "command": "layerCommand",
+            "args": {
+                "usizeParam": 7,
+                "boolParam": false
+            }
+        },
+        {
+            "key": "ctrl alt win 9",
+            "command": "layerCommand",
+            "args": {
+                "usizeParam": 8,
+                "boolParam": false
+            }
+        },
+        {
+            "key": "ctrl alt win 0",
+            "command": "layerCommand",
+            "args": {
+                "usizeParam": 9,
+                "boolParam": false
+            }
+        },
+
+        {
+            "key": "ctrl alt win shift 1",
+            "command": "layerCommand",
+            "args": {
+                "usizeParam": 0,
+                "boolParam": true
+            }
+        },
+        {
+            "key": "ctrl alt win shift 2",
+            "command": "layerCommand",
+            "args": {
+                "usizeParam": 1,
+                "boolParam": true
+            }
+        },
+        {
+            "key": "ctrl alt win shift 3",
+            "command": "layerCommand",
+            "args": {
+                "usizeParam": 2,
+                "boolParam": true
+            }
+        },
+        {
+            "key": "ctrl alt win shift 4",
+            "command": "layerCommand",
+            "args": {
+                "usizeParam": 3,
+                "boolParam": true
+            }
+        },
+        {
+            "key": "ctrl alt win shift 5",
+            "command": "layerCommand",
+            "args": {
+                "usizeParam": 4,
+                "boolParam": true
+            }
+        },
+        {
+            "key": "ctrl alt win shift 6",
+            "command": "layerCommand",
+            "args": {
+                "usizeParam": 5,
+                "boolParam": true
+            }
+        },
+        {
+            "key": "ctrl alt win shift 7",
+            "command": "layerCommand",
+            "args": {
+                "usizeParam": 6,
+                "boolParam": true
+            }
+        },
+        {
+            "key": "ctrl alt win shift 8",
+            "command": "layerCommand",
+            "args": {
+                "usizeParam": 7,
+                "boolParam": true
+            }
+        },
+        {
+            "key": "ctrl alt win shift 9",
+            "command": "layerCommand",
+            "args": {
+                "usizeParam": 8,
+                "boolParam": true
+            }
+        },
+        {
+            "key": "ctrl alt win shift 0",
+            "command": "layerCommand",
+            "args": {
+                "usizeParam": 9,
+                "boolParam": true
+            }
+        }
+    ]
+}

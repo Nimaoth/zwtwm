@@ -3,18 +3,12 @@ const root = @import("root");
 
 usingnamespace @import("zigwin32").everything;
 usingnamespace @import("misc.zig");
+usingnamespace @import("util.zig");
 usingnamespace @import("layer.zig");
 usingnamespace @import("window_manager.zig");
+usingnamespace @import("config.zig");
 
 pub const WINDOW_NAME = "zwtwm";
-
-pub const HotkeyArgs = struct {
-    intParam: i64 = 0,
-    usizeParam: usize = 0,
-    floatParam: f64 = 0.0,
-    boolParam: bool = false,
-    charParam: i27 = 0,
-};
 
 pub const Monitor = struct {
     const Self = @This();
@@ -244,11 +238,7 @@ pub const Monitor = struct {
         if (layer.windows.items.len == 0) {
             self.currentWindow = 0;
         } else {
-            if (self.currentWindow == 0) {
-                self.currentWindow = layer.windows.items.len - 1;
-            } else {
-                self.currentWindow -= 1;
-            }
+            self.currentWindow = moveIndex(self.currentWindow, -1, layer.windows.items.len, self.windowManager.config.wrapWindows);
         }
 
         self.focusCurrentWindow();
@@ -261,10 +251,7 @@ pub const Monitor = struct {
         if (layer.windows.items.len == 0) {
             self.currentWindow = 0;
         } else {
-            self.currentWindow += 1;
-            if (self.currentWindow >= layer.windows.items.len) {
-                self.currentWindow = 0;
-            }
+            self.currentWindow = moveIndex(self.currentWindow, 1, layer.windows.items.len, self.windowManager.config.wrapWindows);
         }
 
         self.focusCurrentWindow();
@@ -280,14 +267,14 @@ pub const Monitor = struct {
 
     pub fn moveCurrentWindowUp(self: *Self) void {
         const layer = self.getCurrentLayer();
-        const dstIndex = @mod(self.currentWindow + layer.windows.items.len - 1, layer.windows.items.len);
+        const dstIndex = moveIndex(self.currentWindow, -1, layer.windows.items.len, self.windowManager.config.wrapWindows);
         layer.moveWindowToIndex(self.currentWindow, dstIndex);
         self.currentWindow = dstIndex;
     }
 
     pub fn moveCurrentWindowDown(self: *Self) void {
         const layer = self.getCurrentLayer();
-        const dstIndex = @mod(self.currentWindow + 1, layer.windows.items.len);
+        const dstIndex = moveIndex(self.currentWindow, 1, layer.windows.items.len, self.windowManager.config.wrapWindows);
         layer.moveWindowToIndex(self.currentWindow, dstIndex);
         self.currentWindow = dstIndex;
     }
@@ -325,8 +312,8 @@ pub const Monitor = struct {
         }
 
         var layer = self.getCurrentLayer();
-        var gap = layer.options.getGap(self.windowManager.options);
-        var splitRatio = layer.options.getSplitRatio(self.windowManager.options);
+        var gap = self.windowManager.config.gap;
+        var splitRatio = self.windowManager.config.splitRatio;
 
         var area = Rect{
             .x = monitor.left + gap,
@@ -449,7 +436,7 @@ pub const Monitor = struct {
         defer _ = DeleteObject(brushCurrentMonitor);
 
         var layer = self.getCurrentLayer();
-        const gap = layer.options.getGap(self.windowManager.options);
+        const gap = self.windowManager.config.gap;
 
         if (isCurrent) {
             var j: i32 = 0;
