@@ -21,8 +21,8 @@ test "moveIndex" {
 
     std.testing.expectEqual(@as(usize, 1), moveIndex(2, -1, 3, true));
     std.testing.expectEqual(@as(usize, 0), moveIndex(2, -2, 3, true));
-    //std.testing.expectEqual(@as(usize, 2), moveIndex(2, -3, 3, true));
-    //std.testing.expectEqual(@as(usize, 1), moveIndex(2, -4, 3, true));
+    std.testing.expectEqual(@as(usize, 2), moveIndex(2, -3, 3, true));
+    std.testing.expectEqual(@as(usize, 1), moveIndex(2, -4, 3, true));
 
     std.testing.expectEqual(@as(usize, 1), moveIndex(0, 1, 3, false));
     std.testing.expectEqual(@as(usize, 2), moveIndex(0, 2, 3, false));

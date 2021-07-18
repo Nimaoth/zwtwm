@@ -25,7 +25,7 @@
         ""
     ],
 
-    "gap": 5,
+    "gap": 0,
     "splitRatio": 0.6,
     "wrapMonitors": false,
     "wrapWindows": true,
