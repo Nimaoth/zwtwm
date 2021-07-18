@@ -51,59 +51,34 @@ pub const Config = struct {
 
     allocator: *std.mem.Allocator,
 
-    commands: std.StringHashMap(fn (*root.WindowManager, HotkeyArgs) void),
-    ignoredPrograms: std.StringHashMap(IgnoredProgram),
-    ignoredClasses: std.StringHashMap(IgnoredProgram),
-    ignoredTitles: std.StringHashMap(IgnoredProgram),
-
     gap: i32 = 5,
     splitRatio: f64 = 0.6,
     wrapMonitors: bool = true,
     wrapWindows: bool = true,
 
+    ignoredPrograms: std.StringHashMap(IgnoredProgram),
+    ignoredClasses: std.StringHashMap(IgnoredProgram),
+    ignoredTitles: std.StringHashMap(IgnoredProgram),
+    commands: std.StringHashMap(fn (*root.WindowManager, HotkeyArgs) void),
     hotkeys: std.ArrayList(Hotkey),
 
     loadedConfig: ?ConfigJson = null,
 
     pub fn init(allocator: *std.mem.Allocator) !Self {
-        var ignoredClasses = std.StringHashMap(IgnoredProgram).init(allocator);
-        var ignoredTitles = std.StringHashMap(IgnoredProgram).init(allocator);
-        var ignoredPrograms = std.StringHashMap(IgnoredProgram).init(allocator);
-        var commands = std.StringHashMap(fn (*root.WindowManager, HotkeyArgs) void).init(allocator);
-
-        try ignoredClasses.put("IME", .{});
-        try ignoredClasses.put("MSCTFIME UI", .{});
-        try ignoredClasses.put("WorkerW", .{});
-        try ignoredClasses.put("vguiPopupWindow", .{});
-        try ignoredClasses.put("tooltips_class32", .{});
-        try ignoredClasses.put("ForegroundStaging", .{});
-        try ignoredClasses.put("TaskManagerWindow", .{});
-        try ignoredClasses.put("Main HighGUI class", .{});
-
-        // Ignore windows with empty titles.
-        try ignoredTitles.put("", .{});
-
-        try ignoredPrograms.put("ScreenClippingHost.exe", .{});
-        try ignoredPrograms.put("PowerLauncher.exe", .{});
-        try ignoredPrograms.put("TextInputHost.exe", .{});
-        try ignoredPrograms.put("ShellExperienceHost.exe", .{});
-        try ignoredPrograms.put("EpicGamesLauncher.exe", .{});
-        try ignoredPrograms.put("ApplicationFrameHost.exe", .{});
-
         return Self{
             .allocator = allocator,
-            .ignoredPrograms = ignoredPrograms,
-            .ignoredClasses = ignoredClasses,
-            .ignoredTitles = ignoredTitles,
+            .ignoredPrograms = std.StringHashMap(IgnoredProgram).init(allocator),
+            .ignoredClasses = std.StringHashMap(IgnoredProgram).init(allocator),
+            .ignoredTitles = std.StringHashMap(IgnoredProgram).init(allocator),
             .hotkeys = std.ArrayList(Hotkey).init(allocator),
-            .commands = commands,
+            .commands = std.StringHashMap(fn (*root.WindowManager, HotkeyArgs) void).init(allocator),
         };
     }
 
     pub fn deinit(self: *Self) void {
+        self.ignoredPrograms.deinit();
         self.ignoredClasses.deinit();
         self.ignoredTitles.deinit();
-        self.ignoredPrograms.deinit();
         self.hotkeys.deinit();
         self.commands.deinit();
 

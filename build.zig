@@ -8,21 +8,26 @@ pub fn build(b: *std.build.Builder) void {
     const target = b.standardTargetOptions(.{});
 
     // Standard release options allow the person running `zig build` to select
-    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
-    const mode = b.standardReleaseOptions();
+    // between Debug, ReleaseSafe
+    const release = b.option(bool, "release", "Optimizations on and safety on, log to file") orelse false;
 
-    const exe = b.addExecutable("zwtwm", "src/main.zig");
+    const mode = if (release) std.builtin.Mode.ReleaseSafe else std.builtin.Mode.Debug;
+    b.is_release = mode != .Debug;
+    b.release_mode = mode;
+
+    const shipping = mode != .Debug;
+
+    const exe = b.addExecutable(if (shipping) "zwtwm" else "zwtwm_debug", "src/main.zig");
+    exe.addBuildOption(bool, "RUN_IN_CONSOLE", !shipping);
+    exe.subsystem = if (shipping) .Windows else .Console;
     exe.addPackage(.{ .name = "zigwin32", .path = "./deps/custom_zigwin32/win32.zig" });
 
-    if (false) {
-        exe.addIncludeDir("./src");
-        exe.addCSourceFile("./src/virtual_desktop_manager.cpp", &.{});
-        exe.linkLibC();
-    }
-
     exe.setTarget(target);
-    exe.setBuildMode(mode);
+    exe.setBuildMode(if (shipping) .ReleaseSafe else mode);
     exe.install();
+
+    // Add config to install.
+    b.installFile("config.json", "bin/config.json");
 
     const run_cmd = exe.run();
     run_cmd.step.dependOn(b.getInstallStep());

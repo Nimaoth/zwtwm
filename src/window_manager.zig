@@ -435,15 +435,13 @@ pub const WindowManager = struct {
 
         if (root.LOG_LAYERS) {
             for (self.monitors.items) |*monitor, k| {
-                std.debug.print("Monitor {}\n", .{k});
+                std.log.info("Monitor {}, {}", .{ k, monitor.rect });
                 for (monitor.layers.items) |*layer, i| {
                     if (layer.isEmpty()) continue;
 
-                    std.debug.print("  Layer {}\n", .{i});
+                    std.log.info("  Layer {}", .{i});
                     for (layer.windows.items) |*window| {
-                        std.debug.print("  {s}: ", .{window.className.value});
-                        std.debug.print("{s}", .{window.title.value});
-                        std.debug.print("   -   {}\n", .{window.rect});
+                        std.log.info("    '{s}', '{s}', '{s}', {}", .{ window.program.value, window.className.value, window.title.value, window.rect });
                     }
                 }
             }
@@ -453,8 +451,10 @@ pub const WindowManager = struct {
     fn loadWindowInfosFromFile(self: *Self) !void {
         std.log.info("Loading window state from '{s}'", .{windowDataFileName});
 
-        var file = std.fs.cwd().openFile(windowDataFileName, .{ .read = true }) catch blk: {
-            break :blk try std.fs.cwd().createFile(windowDataFileName, .{ .read = true });
+        var file = std.fs.cwd().openFile(windowDataFileName, .{ .read = true }) catch {
+            const f = try std.fs.cwd().createFile(windowDataFileName, .{ .read = true });
+            f.close();
+            return;
         };
         defer file.close();
         const fileSize = try file.getEndPos();
@@ -679,6 +679,9 @@ pub const WindowManager = struct {
                     try self.monitors.append(try Monitor.init(new.hmonitor, self));
                 }
             }
+        }
+        for (self.monitors.items) |*monitor, k| {
+            monitor.index = k;
         }
 
         for (self.monitors.items) |*monitor, i| {

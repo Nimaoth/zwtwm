@@ -5,19 +5,44 @@ usingnamespace @import("misc.zig");
 usingnamespace @import("window_manager.zig");
 usingnamespace @import("layer.zig");
 
+const BuildOptions = @import("build_options");
+
 pub const LOG_LAYERS = true;
 pub const ONLY_USE_HALF_MONITOR = false;
+
+const LOG_TO_FILE = !BuildOptions.RUN_IN_CONSOLE;
+const LOG_FILE_PATH = "log.txt";
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 pub var gWindowManager: WindowManager = undefined;
 pub var gWindowStringArena: *std.mem.Allocator = undefined;
 
+var gLogFile: ?std.fs.File = undefined;
+
+pub const log_level: std.log.Level = switch (std.builtin.mode) {
+    .Debug => .debug,
+    .ReleaseSafe => .info,
+    .ReleaseFast => .err,
+    .ReleaseSmall => .err,
+};
+
 pub fn main() anyerror!void {
+    if (LOG_TO_FILE) {
+        gLogFile = try std.fs.cwd().createFile(LOG_FILE_PATH, .{});
+    }
+    defer if (gLogFile) |logFile| {
+        logFile.close();
+    };
+
     defer _ = gpa.deinit();
 
     var windowStringArena = std.heap.ArenaAllocator.init(&gpa.allocator);
     defer windowStringArena.deinit();
     gWindowStringArena = &windowStringArena.allocator;
+
+    if (BuildOptions.RUN_IN_CONSOLE) {
+        try enableVTMode();
+    }
 
     std.log.emerg("emerg", .{});
     std.log.alert("alert", .{});
@@ -33,8 +58,10 @@ pub fn main() anyerror!void {
 
     try gWindowManager.setup();
 
-    if (SetConsoleCtrlHandler(ConsoleCtrlHandler, 1) == 0) {
-        std.log.err("Failed to install console ctrl handle: {}", .{GetLastError()});
+    if (BuildOptions.RUN_IN_CONSOLE) {
+        if (SetConsoleCtrlHandler(ConsoleCtrlHandler, 1) == 0) {
+            std.log.err("Failed to install console ctrl handle: {}", .{GetLastError()});
+        }
     }
 
     var msg: MSG = undefined;
@@ -51,10 +78,6 @@ pub fn main() anyerror!void {
 fn ConsoleCtrlHandler(CtrlType: u32) callconv(@import("std").os.windows.WINAPI) BOOL {
     std.log.debug("ConsoleCtrlHandler: {}", .{CtrlType});
 
-    gWindowManager.writeWindowInfosToFile() catch |err| {
-        std.log.err("Failed to save window data in file: {}", .{err});
-    };
-
     // @todo: handle thread synchronization.
     std.log.info("Make all managed windows visible again.", .{});
     for (gWindowManager.monitors.items) |*monitor| {
@@ -64,6 +87,11 @@ fn ConsoleCtrlHandler(CtrlType: u32) callconv(@import("std").os.windows.WINAPI) 
             }
         }
     }
+
+    gWindowManager.writeWindowInfosToFile() catch |err| {
+        std.log.err("Failed to save window data in file: {}", .{err});
+    };
+
     return 0;
 }
 
@@ -95,23 +123,31 @@ pub fn log(
     };
 
     const prefix2 = if (scope == .default) "" else ":" ++ @tagName(scope);
-    const stderr = std.io.getStdErr().writer();
-    const held = std.debug.getStderrMutex().acquire();
-    defer held.release();
+    if (LOG_TO_FILE) {
+        const out = gLogFile.?.writer();
 
-    {
-        defer vtCsi(stderr, "0m");
+        nosuspend out.print("[{}] [" ++ level_txt ++ prefix2 ++ "] ", .{GetCurrentThreadId()}) catch {};
+        nosuspend out.print(format, args) catch {};
+        nosuspend out.writeAll("\n") catch {};
+    } else {
+        const stderr = std.io.getStdErr().writer();
+        const held = std.debug.getStderrMutex().acquire();
+        defer held.release();
 
-        vtCsi(stderr, "0m");
-        nosuspend stderr.print("[{}] ", .{GetCurrentThreadId()}) catch {};
+        {
+            defer vtCsi(stderr, "0m");
 
-        vtCsi(stderr, "1m");
-        nosuspend stderr.print("[" ++ level_txt ++ prefix2 ++ "] ", .{}) catch {};
+            vtCsi(stderr, "0m");
+            nosuspend stderr.print("[{}] ", .{GetCurrentThreadId()}) catch {};
 
-        vtCsi(stderr, color);
-        nosuspend stderr.print(format, args) catch {};
+            vtCsi(stderr, "1m");
+            nosuspend stderr.print("[" ++ level_txt ++ prefix2 ++ "] ", .{}) catch {};
+
+            vtCsi(stderr, color);
+            nosuspend stderr.print(format, args) catch {};
+        }
+        nosuspend stderr.writeAll("\n") catch {};
     }
-    nosuspend stderr.writeAll("\n") catch {};
 }
 
 fn enableVTMode() !void {

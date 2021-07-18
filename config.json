@@ -7,6 +7,7 @@
         "ShellExperienceHost.exe",
         "EpicGamesLauncher.exe",
         "SystemSettings.exe",
+        "WinStore.App.exe",
         "ApplicationFrameHost.exe"
     ],
 
@@ -18,6 +19,7 @@
         "tooltips_class32",
         "ForegroundStaging",
         "TaskManagerWindow",
+        "OperationStatusWindow",
         "Main HighGUI class"
     ],
 

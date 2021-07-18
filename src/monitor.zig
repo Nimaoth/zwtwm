@@ -19,6 +19,7 @@ pub const Monitor = struct {
     currentLayer: usize = 0,
     currentWindow: usize = 0,
 
+    index: usize = 0,
     hmonitor: HMONITOR,
     rect: RECT,
     workingArea: RECT,
@@ -411,15 +412,13 @@ pub const Monitor = struct {
         //self.rerenderOverlay();
 
         if (root.LOG_LAYERS) {
-            std.debug.print("Monitor {}\n", .{self.rect});
+            std.log.info("Monitor {}, {}", .{ self.index, self.rect });
             for (self.layers.items) |*l, i| {
                 if (l.isEmpty()) continue;
 
-                std.debug.print("  Layer {}\n", .{i});
+                std.log.info("  Layer {}", .{i});
                 for (l.windows.items) |*window| {
-                    std.debug.print("    '{s}', '{s}', ", .{ window.className.value, window.program.value });
-                    std.debug.print("'{s}'", .{window.title.value});
-                    std.debug.print("   -   {}\n", .{window.rect});
+                    std.log.info("    '{s}', '{s}', '{s}', {}", .{ window.program.value, window.className.value, window.title.value, window.rect });
                 }
             }
         }
