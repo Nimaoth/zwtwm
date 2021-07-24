@@ -328,7 +328,9 @@ pub const Monitor = struct {
             if (layer.fullscreen) {
                 const window = layer.getWindowAt(self.currentWindow).?;
 
-                if (!(windowHasRect(window.hwnd, self.rect) catch false)) {
+                if (windowHasRect(window.hwnd, self.rect) catch false) {
+                    window.rect = self.rect;
+                } else {
                     if (isWindowMaximized(window.hwnd) catch false) {
                         std.log.debug("Restoring window because it is maximized: {}", .{window.hwnd});
                         _ = ShowWindow(window.hwnd, SW_RESTORE);
@@ -355,13 +357,13 @@ pub const Monitor = struct {
                     return;
                 }
 
+                var currentWindowFullscreen = false;
+                if (self.getCurrentWindow()) |window| {
+                    currentWindowFullscreen = windowHasRect(window.hwnd, self.rect) catch false;
+                }
+
                 var x: i32 = area.left;
                 for (layer.windows.items) |*window, i| {
-                    if (windowHasRect(window.hwnd, self.rect) catch false) {
-                        // Window is fullscreen.
-                        continue;
-                    }
-
                     if (isWindowMaximized(window.hwnd) catch false) {
                         std.log.debug("Restoring window because it is maximized: {}", .{window.hwnd});
                         _ = ShowWindow(window.hwnd, SW_RESTORE);
@@ -386,6 +388,12 @@ pub const Monitor = struct {
                         }
                     }
 
+                    if (windowHasRect(window.hwnd, self.rect) catch false) {
+                        // Window is fullscreen.
+                        window.rect = self.rect;
+                        continue;
+                    }
+
                     window.rect = windowArea;
 
                     const visualRect = getRectWithoutBorder(window.hwnd, window.rect);
@@ -399,7 +407,9 @@ pub const Monitor = struct {
                         visualRect.bottom - visualRect.top,
                         SET_WINDOW_POS_FLAGS.initFlags(.{
                             .NOOWNERZORDER = 1,
-                            .SHOWWINDOW = 1,
+                            .SHOWWINDOW = if (!currentWindowFullscreen) 1 else 0,
+                            .NOACTIVATE = if (currentWindowFullscreen) 1 else 0,
+                            .NOZORDER = if (currentWindowFullscreen) 1 else 0,
                         }),
                     );
 
