@@ -89,7 +89,16 @@ pub fn getWindowExePath(hwnd: HWND, allocator: *std.mem.Allocator) !String {
     }
 }
 
-pub fn getMonitorRect() !RECT {
+pub fn getMonitorRect(hmon: HMONITOR) !RECT {
+    var monitorInfo: MONITORINFO = undefined;
+    monitorInfo.cbSize = @sizeOf(MONITORINFO);
+    if (GetMonitorInfo(hmon, &monitorInfo) == 0) {
+        return error.FailedToGetMonitorInfo;
+    }
+    return monitorInfo.rcMonitor;
+}
+
+pub fn getMainMonitorRect() !RECT {
     var rect: RECT = undefined;
     if (SystemParametersInfoA(
         .GETWORKAREA,
@@ -210,4 +219,27 @@ pub fn getCursorPos() !POINT {
 
 pub fn rectContainsPoint(rect: RECT, point: POINT) bool {
     return point.x >= rect.left and point.x <= rect.right and point.y >= rect.top and point.y <= rect.bottom;
+}
+
+pub fn windowHasRect(hwnd: HWND, rect: RECT) !bool {
+    const windowRect = try getWindowRect(hwnd);
+
+    return windowRect.left == rect.left //
+    and windowRect.right == rect.right //
+    and windowRect.top == rect.top //
+    and windowRect.bottom == rect.bottom;
+}
+
+pub fn isWindowFullscreenOnMonitor(hwnd: HWND, hmon: HMONITOR) !bool {
+    var monitorInfo: MONITORINFO = undefined;
+    monitorInfo.cbSize = @sizeOf(MONITORINFO);
+    if (GetMonitorInfo(hmon, &monitorInfo) == 0) {
+        return error.FailedToGetMonitorInfo;
+    }
+
+    return windowHasRect(hwnd, monitorInfo.rcMonitor);
+}
+
+pub fn isWindowFullscreen(hwnd: HWND) !bool {
+    return isWindowFullscreenOnMonitor(MonitorFromWindow(hwnd, .PRIMARY));
 }

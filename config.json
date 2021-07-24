@@ -1,4 +1,24 @@
 {
+    "gap": 0,
+    "splitRatio": 0.6,
+    "wrapMonitors": false,
+    "wrapWindows": true,
+    "disableOutlineForFullscreen": true,
+
+    "monitorBorder": {
+        "thickness": 2,
+        "color": "0xFF00FF"
+    },
+
+    "windowFocusedBorder": {
+        "thickness": 3,
+        "color": "0x287DC8"
+    },
+
+    "windowUnfocusedBorder": {
+        "thickness": 1,
+        "color": "0xFA9632"
+    },
 
     "ignoredPrograms": [
         "ScreenClippingHost.exe",
@@ -27,11 +47,6 @@
     "ignoredTitles": [
         ""
     ],
-
-    "gap": 0,
-    "splitRatio": 0.6,
-    "wrapMonitors": false,
-    "wrapWindows": true,
 
     "hotkeys": [
         {

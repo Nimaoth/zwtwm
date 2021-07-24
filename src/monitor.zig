@@ -328,24 +328,26 @@ pub const Monitor = struct {
             if (layer.fullscreen) {
                 const window = layer.getWindowAt(self.currentWindow).?;
 
-                if (isWindowMaximized(window.hwnd) catch false) {
-                    std.log.debug("Restoring window because it is maximized: {}", .{window.hwnd});
-                    _ = ShowWindow(window.hwnd, SW_RESTORE);
-                }
+                if (!(windowHasRect(window.hwnd, self.rect) catch false)) {
+                    if (isWindowMaximized(window.hwnd) catch false) {
+                        std.log.debug("Restoring window because it is maximized: {}", .{window.hwnd});
+                        _ = ShowWindow(window.hwnd, SW_RESTORE);
+                    }
 
-                window.rect = area;
+                    window.rect = area;
 
-                const visualRect = getRectWithoutBorder(window.hwnd, window.rect);
-                if (SetWindowPos(
-                    window.hwnd,
-                    null,
-                    visualRect.left,
-                    visualRect.top,
-                    visualRect.right - visualRect.left,
-                    visualRect.bottom - visualRect.top,
-                    SET_WINDOW_POS_FLAGS.initFlags(.{}),
-                ) == 0) {
-                    std.log.err("Failed to set window position of {}", .{window.hwnd});
+                    const visualRect = getRectWithoutBorder(window.hwnd, window.rect);
+                    if (SetWindowPos(
+                        window.hwnd,
+                        null,
+                        visualRect.left,
+                        visualRect.top,
+                        visualRect.right - visualRect.left,
+                        visualRect.bottom - visualRect.top,
+                        SET_WINDOW_POS_FLAGS.initFlags(.{}),
+                    ) == 0) {
+                        std.log.err("Failed to set window position of {}", .{window.hwnd});
+                    }
                 }
             } else {
                 var hdwp = BeginDeferWindowPos(@intCast(i32, numWindows));
@@ -355,6 +357,11 @@ pub const Monitor = struct {
 
                 var x: i32 = area.left;
                 for (layer.windows.items) |*window, i| {
+                    if (windowHasRect(window.hwnd, self.rect) catch false) {
+                        // Window is fullscreen.
+                        continue;
+                    }
+
                     if (isWindowMaximized(window.hwnd) catch false) {
                         std.log.debug("Restoring window because it is maximized: {}", .{window.hwnd});
                         _ = ShowWindow(window.hwnd, SW_RESTORE);
@@ -409,8 +416,6 @@ pub const Monitor = struct {
             }
         }
 
-        //self.rerenderOverlay();
-
         if (root.LOG_LAYERS) {
             std.log.info("Monitor {}, {}", .{ self.index, self.rect });
             for (self.layers.items) |*l, i| {
@@ -425,35 +430,57 @@ pub const Monitor = struct {
     }
 
     pub fn renderOverlay(self: *Self, hdc: HDC, region: RECT, isCurrent: bool, convertToClient: bool) void {
-        var brushFocused = CreateSolidBrush(rgb(50, 150, 250));
+        const config = &self.windowManager.config;
+
+        var brushFocused = CreateSolidBrush(config.windowFocusedBorder.color);
         defer _ = DeleteObject(brushFocused);
-        var brushUnfocused = CreateSolidBrush(rgb(200, 125, 40));
+        var brushUnfocused = CreateSolidBrush(config.windowUnfocusedBorder.color);
         defer _ = DeleteObject(brushUnfocused);
-        var brushCurrentMonitor = CreateSolidBrush(rgb(255, 0, 255));
+        var brushCurrentMonitor = CreateSolidBrush(config.monitorBorder.color);
         defer _ = DeleteObject(brushCurrentMonitor);
 
         var layer = self.getCurrentLayer();
-        const gap = self.windowManager.config.gap;
 
         if (isCurrent) {
-            var j: i32 = 0;
-            var monitorRect = if (convertToClient) screenToClient(self.overlayWindow, self.rect) else self.rect;
-            //std.log.debug("renderOverlay({}, {}):\nregion:   {}\nmonitor1: {}\nmonitor2: {}", .{ isCurrent, convertToClient, region, self.rect, monitorRect });
-            while (j < 1) : (j += 1) {
-                const winRect2 = expand(monitorRect, -j);
-                _ = FrameRect(hdc, &winRect2, brushCurrentMonitor);
+            if (self.getCurrentWindow()) |window| {
+                if (windowHasRect(window.hwnd, self.rect) catch false) {
+                    // Current window is fullscreen.
+                    if (config.disableOutlineForFullscreen) {
+                        return;
+                    }
+                }
+            }
+            const foregroundWindow = GetForegroundWindow();
+
+            {
+                // monitor border
+                var monitorRect = if (convertToClient) screenToClient(self.overlayWindow, self.rect) else self.rect;
+                var i: i32 = 0;
+                while (i < config.monitorBorder.thickness) : (i += 1) {
+                    const rect = expand(monitorRect, -i);
+                    _ = FrameRect(hdc, &rect, brushCurrentMonitor);
+                }
             }
 
-            for (layer.windows.items) |*window, i| {
+            for (layer.windows.items) |*window, windowIndex| {
                 const winRect = if (convertToClient) screenToClient(self.overlayWindow, window.rect) else window.rect;
 
-                if (i == self.currentWindow) {
-                    const brush = if (window.hwnd == GetForegroundWindow()) brushFocused else brushUnfocused;
+                if (windowIndex == self.currentWindow) {
+                    var brush = brushUnfocused;
+                    var thickness = config.windowUnfocusedBorder.thickness;
 
-                    var k: i32 = 0;
-                    while (k < 2) : (k += 1) {
-                        const winRect2 = expand(winRect, -k);
-                        _ = FrameRect(hdc, &winRect2, brush);
+                    if (window.hwnd == foregroundWindow) {
+                        brush = brushFocused;
+                        thickness = config.windowFocusedBorder.thickness;
+                    }
+
+                    {
+                        // window border
+                        var i: i32 = 0;
+                        while (i < thickness) : (i += 1) {
+                            const rect = expand(winRect, -i);
+                            _ = FrameRect(hdc, &rect, brush);
+                        }
                     }
                 }
             }

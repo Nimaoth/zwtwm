@@ -20,14 +20,23 @@ const HotkeyJson = struct {
     args: HotkeyArgsJson = .{},
 };
 
+const BorderJson = struct {
+    thickness: usize = 2,
+    color: []const u8 = "0xFF00FF",
+};
+
 const ConfigJson = struct {
-    ignoredPrograms: [][]const u8,
-    ignoredClasses: [][]const u8,
-    ignoredTitles: [][]const u8,
     gap: i32 = 5,
     splitRatio: f64 = 0.6,
     wrapMonitors: bool = true,
     wrapWindows: bool = true,
+    disableOutlineForFullscreen: bool = true,
+    monitorBorder: BorderJson = .{},
+    windowFocusedBorder: BorderJson = .{},
+    windowUnfocusedBorder: BorderJson = .{},
+    ignoredPrograms: [][]const u8,
+    ignoredClasses: [][]const u8,
+    ignoredTitles: [][]const u8,
     hotkeys: []HotkeyJson,
 };
 
@@ -46,6 +55,11 @@ pub const Hotkey = struct {
     args: HotkeyArgs = .{},
 };
 
+const Border = struct {
+    thickness: usize = 2,
+    color: u32 = 0,
+};
+
 pub const Config = struct {
     const Self = @This();
 
@@ -55,6 +69,11 @@ pub const Config = struct {
     splitRatio: f64 = 0.6,
     wrapMonitors: bool = true,
     wrapWindows: bool = true,
+
+    disableOutlineForFullscreen: bool = true,
+    monitorBorder: Border = .{},
+    windowFocusedBorder: Border = .{},
+    windowUnfocusedBorder: Border = .{},
 
     ignoredPrograms: std.StringHashMap(IgnoredProgram),
     ignoredClasses: std.StringHashMap(IgnoredProgram),
@@ -109,28 +128,38 @@ pub const Config = struct {
         const options = std.json.ParseOptions{
             .allocator = self.allocator,
         };
+
+        @setEvalBranchQuota(100000);
         self.loadedConfig = try std.json.parse(ConfigJson, &tokenStream, options);
 
-        // Copy fields.
-        self.gap = self.loadedConfig.?.gap;
-        self.splitRatio = self.loadedConfig.?.splitRatio;
-        self.wrapMonitors = self.loadedConfig.?.wrapMonitors;
-        self.wrapWindows = self.loadedConfig.?.wrapWindows;
+        const config = &self.loadedConfig.?;
 
-        for (self.loadedConfig.?.ignoredPrograms) |name| {
+        // Copy fields.
+        self.gap = config.gap;
+        self.splitRatio = config.splitRatio;
+        self.wrapMonitors = config.wrapMonitors;
+        self.wrapWindows = config.wrapWindows;
+
+        self.disableOutlineForFullscreen = config.disableOutlineForFullscreen;
+        self.monitorBorder = self.parseBorderConfig(config.monitorBorder);
+        self.windowFocusedBorder = self.parseBorderConfig(config.windowFocusedBorder);
+        self.windowUnfocusedBorder = self.parseBorderConfig(config.windowUnfocusedBorder);
+
+        //
+        for (config.ignoredPrograms) |name| {
             try self.ignoredPrograms.put(name, .{});
         }
 
-        for (self.loadedConfig.?.ignoredClasses) |name| {
+        for (config.ignoredClasses) |name| {
             try self.ignoredClasses.put(name, .{});
         }
 
-        for (self.loadedConfig.?.ignoredTitles) |name| {
+        for (config.ignoredTitles) |name| {
             try self.ignoredTitles.put(name, .{});
         }
 
         // Get hotkeys
-        hotkeyLoop: for (self.loadedConfig.?.hotkeys) |*hotkey| {
+        hotkeyLoop: for (config.hotkeys) |*hotkey| {
             var key: ?u32 = 0;
             var mods = HOT_KEY_MODIFIERS.initFlags(.{});
 
@@ -224,5 +253,27 @@ pub const Config = struct {
                 .args = args,
             });
         }
+    }
+
+    fn parseBorderConfig(self: *Self, json: BorderJson) Border {
+        var border = Border{};
+        border.thickness = json.thickness;
+        if (std.mem.startsWith(u8, json.color, "0x")) {
+            const color = std.fmt.parseUnsigned(u32, json.color[2..], 16) catch blk: {
+                std.log.err("Failed to parse color string as hex number: '{s}'", .{json.color});
+                break :blk 0;
+            };
+            // Config uses RGB format but windows uses BGR format, so convert.
+            border.color = ((color & 0x0000FF) << 16) | (color & 0x00FF00) | ((color & 0xFF0000) >> 16);
+        } else if (std.mem.eql(u8, json.color, "red")) {
+            border.color = 0x0000FF;
+        } else if (std.mem.eql(u8, json.color, "green")) {
+            border.color = 0x00FF00;
+        } else if (std.mem.eql(u8, json.color, "blue")) {
+            border.color = 0xFF0000;
+        } else {
+            std.log.err("Unknown color: '{s}'", .{json.color});
+        }
+        return border;
     }
 };
