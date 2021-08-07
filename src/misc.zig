@@ -89,12 +89,17 @@ pub fn getWindowExePath(hwnd: HWND, allocator: *std.mem.Allocator) !String {
     }
 }
 
-pub fn getMonitorRect(hmon: HMONITOR) !RECT {
+pub fn getMonitorInfo(hmon: HMONITOR) !MONITORINFO {
     var monitorInfo: MONITORINFO = undefined;
     monitorInfo.cbSize = @sizeOf(MONITORINFO);
-    if (GetMonitorInfo(hmon, &monitorInfo) == 0) {
+    if (GetMonitorInfoA(hmon, &monitorInfo) == 0) {
         return error.FailedToGetMonitorInfo;
     }
+    return monitorInfo;
+}
+
+pub fn getMonitorRect(hmon: HMONITOR) !RECT {
+    const monitorInfo = try getMonitorInfo(hmon);
     return monitorInfo.rcMonitor;
 }
 
@@ -174,30 +179,14 @@ pub fn setWindowVisibility(hwnd: HWND, shouldBeVisible: bool) void {
 }
 
 pub fn screenToClient(hwnd: HWND, rect: RECT) RECT {
-    if (true) {
-        const overlayRect: RECT = getWindowRect(hwnd) catch return rect;
+    const overlayRect: RECT = getWindowRect(hwnd) catch return rect;
 
-        return RECT{
-            .left = rect.left - overlayRect.left,
-            .right = rect.right - overlayRect.left,
-            .top = rect.top - overlayRect.top,
-            .bottom = rect.bottom - overlayRect.top,
-        };
-    } else {
-        var result = rect;
-
-        var temp = POINT{ .x = rect.left, .y = rect.top };
-        std.debug.assert(ScreenToClient(hwnd, &temp) != 0);
-        result.left = temp.x;
-        result.top = temp.y;
-
-        temp = POINT{ .x = rect.right, .y = rect.bottom };
-        std.debug.assert(ScreenToClient(hwnd, &temp) != 0);
-        result.right = temp.x;
-        result.bottom = temp.y;
-
-        return rect;
-    }
+    return RECT{
+        .left = rect.left - overlayRect.left,
+        .right = rect.right - overlayRect.left,
+        .top = rect.top - overlayRect.top,
+        .bottom = rect.bottom - overlayRect.top,
+    };
 }
 
 pub fn getWindowRect(hwnd: HWND) !RECT {
@@ -225,21 +214,44 @@ pub fn windowHasRect(hwnd: HWND, rect: RECT) !bool {
     const windowRect = try getWindowRect(hwnd);
 
     return windowRect.left == rect.left //
-    and windowRect.right == rect.right //
-    and windowRect.top == rect.top //
-    and windowRect.bottom == rect.bottom;
+        and windowRect.right == rect.right //
+        and windowRect.top == rect.top //
+        and windowRect.bottom == rect.bottom;
 }
 
 pub fn isWindowFullscreenOnMonitor(hwnd: HWND, hmon: HMONITOR) !bool {
-    var monitorInfo: MONITORINFO = undefined;
-    monitorInfo.cbSize = @sizeOf(MONITORINFO);
-    if (GetMonitorInfo(hmon, &monitorInfo) == 0) {
-        return error.FailedToGetMonitorInfo;
-    }
-
+    const monitorInfo = try getMonitorInfo(hmon);
     return windowHasRect(hwnd, monitorInfo.rcMonitor);
 }
 
 pub fn isWindowFullscreen(hwnd: HWND) !bool {
     return isWindowFullscreenOnMonitor(MonitorFromWindow(hwnd, .PRIMARY));
+}
+
+pub fn maximizeWindowOnMonitor(hwnd: HWND, hmonitor: HMONITOR) !void {
+    const currentMonitor = MonitorFromWindow(hwnd, .PRIMARY);
+    if (currentMonitor != hmonitor) {
+        const monitorInfo = try getMonitorInfo(hmonitor);
+        try setWindowRect(hwnd, monitorInfo.rcWork, .{});
+    }
+    _ = ShowWindow(hwnd, SW_MAXIMIZE);
+}
+
+fn GetFirstParamType(comptime T: anytype) type {
+    const functionInfo = @typeInfo(@TypeOf(T));
+    return functionInfo.Fn.args[0].arg_type.?;
+}
+
+pub fn setWindowRect(hwnd: HWND, rect: RECT, flags: GetFirstParamType(SET_WINDOW_POS_FLAGS.initFlags)) !void {
+    if (SetWindowPos(
+        hwnd,
+        null,
+        rect.left,
+        rect.top,
+        rect.right - rect.left,
+        rect.bottom - rect.top,
+        SET_WINDOW_POS_FLAGS.initFlags(flags),
+    ) == 0) {
+        return error.FailedToSetWindowPosition;
+    }
 }

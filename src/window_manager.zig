@@ -21,15 +21,27 @@ const Command = enum {
 
 const WindowData = struct {
     rect: RECT,
+    monitor: HMONITOR,
+    maximized: bool,
 };
 
 // This stuff gets store in a file so that when you start
 // the window server it can read some data from the previous
 // run like positions of windows in the layers/stacks.
+const PersistantMonitorData = struct {
+    layers: []PersistantLayerData,
+};
+const PersistantLayerData = struct {
+    fullscreen: bool,
+};
 const PersistantWindowData = struct {
     hwnd: usize,
     monitor: usize,
     layers: []isize,
+};
+const PersistantData = struct {
+    monitors: []PersistantMonitorData,
+    windows: []PersistantWindowData,
 };
 
 pub const WindowManager = struct {
@@ -142,7 +154,7 @@ pub const WindowManager = struct {
         var iter = self.windowData.iterator();
         while (iter.next()) |entry| {
             if (self.isWindowManaged(entry.key)) {
-                self.resetWindowPosToUnmanaged(entry.key);
+                self.resetWindowToUnmanaged(entry.key);
             }
         }
 
@@ -200,7 +212,9 @@ pub const WindowManager = struct {
 
         // Initial update + layout.
         self.updateWindowInfos();
-        try self.loadWindowInfosFromFile();
+        self.loadWindowInfosFromFile() catch |err| {
+            std.log.err("Failed to load window data from file: {}", .{err});
+        };
         self.updateAllWindowVisibilities();
         self.layoutWindowsOnAllMonitors();
         self.rerenderOverlay();
@@ -316,7 +330,7 @@ pub const WindowManager = struct {
                     if (getCursorPos() catch null) |cursorPos| {
                         if (!self.isPointInWorkingArea(cursorPos)) {
                             self.removeManagedWindow(hwnd);
-                            self.resetWindowPosToUnmanaged(hwnd);
+                            self.resetWindowToUnmanaged(hwnd);
                             srcMonitor.layoutWindows();
                             self.rerenderOverlay();
                             return;
@@ -467,11 +481,21 @@ pub const WindowManager = struct {
         const options = std.json.ParseOptions{
             .allocator = self.allocator,
         };
-        const TypeToParse = []PersistantWindowData;
-        const persistantWindowData = try std.json.parse(TypeToParse, &tokenStream, options);
-        defer std.json.parseFree(TypeToParse, persistantWindowData, options);
+        const TypeToParse = PersistantData;
+        const persistantData = try std.json.parse(TypeToParse, &tokenStream, options);
+        defer std.json.parseFree(TypeToParse, persistantData, options);
 
-        for (persistantWindowData) |*data| {
+        for (persistantData.monitors) |*monitorData, i| {
+            if (i >= self.monitors.items.len) break;
+            var monitor = self.getMonitorAt(i);
+            for (monitorData.layers) |*data, k| {
+                if (k >= monitor.layers.items.len) break;
+                var layer = monitor.getLayer(k);
+                layer.fullscreen = data.fullscreen;
+            }
+        }
+
+        for (persistantData.windows) |*data| {
             std.log.info("{}", .{data});
 
             const hwnd = @intToPtr(HWND, data.hwnd);
@@ -506,6 +530,8 @@ pub const WindowManager = struct {
 
                     try self.windowData.put(hwnd, .{
                         .rect = try getWindowRect(hwnd),
+                        .maximized = isWindowMaximized(hwnd) catch false,
+                        .monitor = MonitorFromWindow(hwnd, .PRIMARY),
                     });
 
                     // Move window to specific layers
@@ -539,6 +565,33 @@ pub const WindowManager = struct {
         defer file.close();
 
         var jw = std.json.writeStream(file.writer(), 10);
+        try jw.beginObject();
+
+        // Monitors
+        try jw.objectField("monitors");
+        try jw.beginArray();
+        for (self.monitors.items) |*monitor| {
+            try jw.arrayElem();
+            try jw.beginObject();
+
+            // Layers
+            try jw.objectField("layers");
+            try jw.beginArray();
+            for (monitor.layers.items) |*layer| {
+                try jw.arrayElem();
+                try jw.beginObject();
+                try jw.objectField("fullscreen");
+                try jw.emitBool(layer.fullscreen);
+                try jw.endObject();
+            }
+            try jw.endArray();
+
+            try jw.endObject();
+        }
+        try jw.endArray();
+
+        // Windows
+        try jw.objectField("windows");
         try jw.beginArray();
 
         // Collect all windows.
@@ -584,6 +637,7 @@ pub const WindowManager = struct {
         }
 
         try jw.endArray();
+        try jw.endObject();
     }
 
     fn handleEnumWindows(
@@ -779,7 +833,6 @@ pub const WindowManager = struct {
                 return false;
             }
         } else {
-            //
             std.log.err("Failed to get exe name from window {}: {s}", .{ hwnd, className.value });
         }
 
@@ -837,6 +890,8 @@ pub const WindowManager = struct {
         std.log.info("manageWindow({}, {})", .{ hwnd, index });
         try self.windowData.put(hwnd, .{
             .rect = try getWindowRect(hwnd),
+            .maximized = isWindowMaximized(hwnd) catch false,
+            .monitor = MonitorFromWindow(hwnd, .PRIMARY),
         });
 
         for (self.monitors.items) |*monitor| {
@@ -969,17 +1024,14 @@ pub const WindowManager = struct {
         srcMonitor.removeManagedWindow(hwnd);
     }
 
-    fn resetWindowPosToUnmanaged(self: *Self, hwnd: HWND) void {
+    fn resetWindowToUnmanaged(self: *Self, hwnd: HWND) void {
         if (self.windowData.get(hwnd)) |data| {
-            _ = SetWindowPos(
-                hwnd,
-                null,
-                data.rect.left,
-                data.rect.top,
-                data.rect.right - data.rect.left,
-                data.rect.bottom - data.rect.top,
-                SET_WINDOW_POS_FLAGS.initFlags(.{}),
-            );
+            if (data.maximized) {
+                maximizeWindowOnMonitor(hwnd, data.monitor) catch {};
+            } else {
+                _ = ShowWindow(hwnd, .RESTORE);
+                setWindowRect(hwnd, data.rect, .{}) catch {};
+            }
         }
     }
 
@@ -1143,7 +1195,7 @@ pub const WindowManager = struct {
         const hwnd = GetForegroundWindow();
         if (self.isWindowManaged(hwnd)) {
             self.removeManagedWindow(hwnd);
-            self.resetWindowPosToUnmanaged(hwnd);
+            self.resetWindowToUnmanaged(hwnd);
             self.layoutWindowsOnAllMonitors();
             self.rerenderOverlay();
         } else if (self.isWindowManageable(hwnd)) {
@@ -1203,7 +1255,6 @@ pub const WindowManager = struct {
                 .{ name.value, title.value, className.value, classNameIgnored, programIgnored },
             );
         } else {
-            //
             std.log.err("Failed to get exe name from window {}: {s}", .{ hwnd, className.value });
         }
     }

@@ -1,18 +1,21 @@
 {
-    "gap": 0,
+    "gap": 5,
     "splitRatio": 0.6,
     "wrapMonitors": false,
     "wrapWindows": true,
     "disableOutlineForFullscreen": true,
+    "disableOutlineForSingleWindow": true,
+    "noGapForSingleWindow": true,
+    "maximizeFullSizeWindows": true,
 
     "monitorBorder": {
-        "thickness": 2,
+        "thickness": 1,
         "color": "0xFF00FF"
     },
 
     "windowFocusedBorder": {
-        "thickness": 3,
-        "color": "0x287DC8"
+        "thickness": 2,
+        "color": "0xFF00FF"
     },
 
     "windowUnfocusedBorder": {

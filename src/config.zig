@@ -31,6 +31,9 @@ const ConfigJson = struct {
     wrapMonitors: bool = true,
     wrapWindows: bool = true,
     disableOutlineForFullscreen: bool = true,
+    disableOutlineForSingleWindow: bool = false,
+    maximizeFullSizeWindows: bool = false,
+    noGapForSingleWindow: bool = false,
     monitorBorder: BorderJson = .{},
     windowFocusedBorder: BorderJson = .{},
     windowUnfocusedBorder: BorderJson = .{},
@@ -71,6 +74,9 @@ pub const Config = struct {
     wrapWindows: bool = true,
 
     disableOutlineForFullscreen: bool = true,
+    disableOutlineForSingleWindow: bool = false,
+    maximizeFullSizeWindows: bool = false,
+    noGapForSingleWindow: bool = false,
     monitorBorder: Border = .{},
     windowFocusedBorder: Border = .{},
     windowUnfocusedBorder: Border = .{},
@@ -141,11 +147,12 @@ pub const Config = struct {
         self.wrapWindows = config.wrapWindows;
 
         self.disableOutlineForFullscreen = config.disableOutlineForFullscreen;
+        self.disableOutlineForSingleWindow = config.disableOutlineForSingleWindow;
+        self.maximizeFullSizeWindows = config.maximizeFullSizeWindows;
+        self.noGapForSingleWindow = config.noGapForSingleWindow;
         self.monitorBorder = self.parseBorderConfig(config.monitorBorder);
         self.windowFocusedBorder = self.parseBorderConfig(config.windowFocusedBorder);
         self.windowUnfocusedBorder = self.parseBorderConfig(config.windowUnfocusedBorder);
-
-        //
         for (config.ignoredPrograms) |name| {
             try self.ignoredPrograms.put(name, .{});
         }
