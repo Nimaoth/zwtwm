@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const Guid = @import("zigwin32").zig.Guid;
 usingnamespace @import("zigwin32").everything;
 usingnamespace @import("misc.zig");
 usingnamespace @import("window_manager.zig");
@@ -9,10 +10,10 @@ const BuildOptions = @import("build_options");
 
 pub const LOG_LAYERS = true;
 pub const ONLY_USE_HALF_MONITOR = false;
+pub const TRAY_GUID = Guid.initString(BuildOptions.TRAY_GUID);
 
 const LOG_TO_FILE = !BuildOptions.RUN_IN_CONSOLE;
 const LOG_FILE_PATH = "log.txt";
-
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 pub var gWindowManager: WindowManager = undefined;
 pub var gWindowStringArena: *std.mem.Allocator = undefined;

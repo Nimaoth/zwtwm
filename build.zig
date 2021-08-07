@@ -19,6 +19,11 @@ pub fn build(b: *std.build.Builder) void {
 
     const exe = b.addExecutable(if (shipping) "zwtwm" else "zwtwm_debug", "src/main.zig");
     exe.addBuildOption(bool, "RUN_IN_CONSOLE", !shipping);
+    if (shipping) {
+        exe.addBuildOption([]const u8, "TRAY_GUID", "99b74174-d3a4-48ba-a886-9af100149755");
+    } else {
+        exe.addBuildOption([]const u8, "TRAY_GUID", "b3e926bb-e7ee-4f2a-b513-0080167ec220");
+    }
     exe.subsystem = if (shipping) .Windows else .Console;
     exe.addPackage(.{ .name = "zigwin32", .path = "./deps/custom_zigwin32/win32.zig" });
 
@@ -28,6 +33,7 @@ pub fn build(b: *std.build.Builder) void {
 
     // Add config to install.
     b.installFile("config.json", "bin/config.json");
+    b.installFile("icon.ico", "bin/icon.ico");
 
     const run_cmd = exe.run();
     run_cmd.step.dependOn(b.getInstallStep());

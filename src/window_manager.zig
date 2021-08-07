@@ -1,6 +1,9 @@
 const std = @import("std");
 const root = @import("root");
 
+const shell = @import("zigwin32").ui.shell;
+const Guid = @import("zigwin32").zig.Guid;
+
 usingnamespace @import("zigwin32").everything;
 usingnamespace @import("misc.zig");
 usingnamespace @import("util.zig");
@@ -8,7 +11,10 @@ usingnamespace @import("layer.zig");
 usingnamespace @import("monitor.zig");
 usingnamespace @import("config.zig");
 
-const CWM_WINDOW_CREATED = WM_USER + 1;
+const NIN_KEYSELECT = NIN_SELECT | 1;
+
+const WM_WINDOW_CREATED = WM_USER + 1;
+const WM_TRAYCALLBACK = WM_APP + 1;
 const HK_CLOSE_WINDOW: i32 = 42069;
 const windowDataFileName = "window_data.json";
 const configFileName = "config.json";
@@ -56,6 +62,8 @@ pub const WindowManager = struct {
     currentCommand: Command = .None,
     nextCommand: Command = .None,
 
+    addedTrayIcon: bool = false,
+
     windowData: std.AutoHashMap(HWND, WindowData),
 
     hHookObjectCreate: HWINEVENTHOOK,
@@ -66,6 +74,7 @@ pub const WindowManager = struct {
     config: Config,
 
     pub fn init(allocator: *std.mem.Allocator) !Self {
+        std.log.debug("WindowManager.init", .{});
         const hInstance = GetModuleHandleA(null);
         const winClass = WNDCLASSEXA{
             .cbSize = @intCast(u32, @sizeOf(WNDCLASSEXA)),
@@ -142,6 +151,14 @@ pub const WindowManager = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        std.log.debug("WindowManager.deinit", .{});
+
+        if (self.addedTrayIcon) {
+            self.removeTrayIcon() catch {
+                std.log.err("Failed to remove tray icon.", .{});
+            };
+        }
+
         self.writeWindowInfosToFile() catch |err| {
             std.log.err("Failed to save window data in file: {}", .{err});
         };
@@ -168,6 +185,7 @@ pub const WindowManager = struct {
     }
 
     pub fn setup(self: *Self) !void {
+        std.log.debug("WindowManager.setup", .{});
         try self.config.addCommand("decreaseGap", Self.cmdDecreaseGap);
         try self.config.addCommand("decreaseSplit", Self.cmdDecreaseSplit);
         try self.config.addCommand("goToPrevMonitor", Self.cmdGoToPrevMonitor);
@@ -221,6 +239,72 @@ pub const WindowManager = struct {
 
         for (self.config.hotkeys.items) |hotkey| {
             try self.registerHotkey(hotkey);
+        }
+
+        if (self.addTrayIcon()) {
+            self.addedTrayIcon = true;
+        } else |err| {
+            std.log.err("Failed to add tray icon", .{});
+        }
+
+        std.log.debug("WindowManager.setup done", .{});
+    }
+
+    fn addTrayIcon(self: *Self) !void {
+        std.log.debug("WindowManager.addTrayIcon", .{});
+        // Load icon.
+        const trayIcon = @ptrCast(?HICON, LoadImageA( // returns a HANDLE so we have to cast to HICON
+            null, // hInstance must be NULL when loading from a file
+            "icon.ico", // the icon file name
+            IMAGE_ICON, // specifies that the file is an icon
+            0, // width of the image (we'll specify default later on)
+            0, // height of the image
+            IMAGE_FLAGS.initFlags(.{
+                .LOADFROMFILE = 1,
+                .DEFAULTSIZE = 0, // default metrics based on the type (IMAGE_ICON, 32x32)
+                .SHARED = 1, // let the system release the handle when it's no longer used
+            }),
+        )) orelse {
+            std.log.err("Failed to load icon", .{});
+            return error.FailedToLoadIcon;
+        };
+
+        var data: shell.NOTIFYICONDATAA = undefined;
+        std.mem.set(u8, std.mem.asBytes(&data), 0);
+        data.cbSize = @sizeOf(shell.NOTIFYICONDATAA);
+        data.hWnd = self.monitors.items[0].overlayWindow;
+        data.uFlags = NOTIFY_ICON_DATA_FLAGS.initFlags(.{
+            .GUID = 1,
+            .TIP = 1,
+            .ICON = 1,
+            .MESSAGE = 1,
+            .SHOWTIP = 1,
+        });
+        data.uCallbackMessage = WM_TRAYCALLBACK;
+        data.hIcon = trayIcon;
+        std.mem.copy(u8, &data.szTip, "Tip123");
+        data.guidItem = root.TRAY_GUID;
+        if (Shell_NotifyIconA(.ADD, &data) == 0) {
+            return error.FailedToAddTrayIcon;
+        }
+
+        data.Anonymous = .{ .uVersion = NOTIFYICON_VERSION_4 };
+        if (Shell_NotifyIconA(.SETVERSION, &data) == 0) {
+            return error.FailedToAddTrayIcon;
+        }
+    }
+
+    fn removeTrayIcon(self: *Self) !void {
+        std.log.debug("WindowManager.removeTrayIcon", .{});
+        var data: shell.NOTIFYICONDATAA = undefined;
+        std.mem.set(u8, std.mem.asBytes(&data), 0);
+        data.cbSize = @sizeOf(shell.NOTIFYICONDATAA);
+        data.uFlags = NOTIFY_ICON_DATA_FLAGS.initFlags(.{
+            .GUID = 1,
+        });
+        data.guidItem = root.TRAY_GUID;
+        if (Shell_NotifyIconA(.DELETE, &data) == 0) {
+            return error.FailedToAddTrayIcon;
         }
     }
 
@@ -424,13 +508,29 @@ pub const WindowManager = struct {
                 monitor.renderOverlay(hdc, ps.rcPaint, monitor == self.getCurrentMonitor(), true);
             },
 
-            CWM_WINDOW_CREATED => {
+            WM_WINDOW_CREATED => {
                 var self = @intToPtr(*WindowManager, @bitCast(usize, GetWindowLongPtrA(hwnd, GWLP_USERDATA)));
                 const window = @intToPtr(HWND, wParam);
                 const event = @intCast(u32, lParam);
                 self.handleWindowEvent(event, window);
             },
 
+            WM_TRAYCALLBACK => {
+                const notificationEvent = lParam & 0xffff;
+                const iconId = (lParam >> 16) & 0xffff;
+
+                switch (notificationEvent) {
+                    NIN_SELECT => {
+                        std.log.notice("NIN_SELECT", .{});
+                    },
+                    WM_CONTEXTMENU => {
+                        std.log.notice("WM_CONTEXTMENU", .{});
+                    },
+                    else => {
+                        //std.log.notice("Traycallback: {}, {}, {x}, {x}, {}, {}", .{ wParam, lParam, notificationEvent, iconId, x, y });
+                    },
+                }
+            },
             else => return DefWindowProcA(hwnd, msg, wParam, lParam),
         }
 
