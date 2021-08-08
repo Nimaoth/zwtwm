@@ -13,11 +13,14 @@ usingnamespace @import("config.zig");
 
 const NIN_KEYSELECT = NIN_SELECT | 1;
 
+const CONTEXT_MENU_EXIT = 0;
 const WM_WINDOW_CREATED = WM_USER + 1;
 const WM_TRAYCALLBACK = WM_APP + 1;
 const HK_CLOSE_WINDOW: i32 = 42069;
 const windowDataFileName = "window_data.json";
 const configFileName = "config.json";
+const TRUE = 1;
+const FALSE = 0;
 
 const Command = enum {
     None,
@@ -63,6 +66,7 @@ pub const WindowManager = struct {
     nextCommand: Command = .None,
 
     addedTrayIcon: bool = false,
+    contextMenu: ?HMENU = null,
 
     windowData: std.AutoHashMap(HWND, WindowData),
 
@@ -153,6 +157,10 @@ pub const WindowManager = struct {
     pub fn deinit(self: *Self) void {
         std.log.debug("WindowManager.deinit", .{});
 
+        if (self.contextMenu) |menu| {
+            _ = DestroyMenu(menu);
+        }
+
         if (self.addedTrayIcon) {
             self.removeTrayIcon() catch {
                 std.log.err("Failed to remove tray icon.", .{});
@@ -234,6 +242,14 @@ pub const WindowManager = struct {
             std.log.err("Failed to load window data from file: {}", .{err});
         };
         self.updateAllWindowVisibilities();
+
+        // Set the current window to the foreground window.
+        const currentForegroundWindow = GetForegroundWindow();
+        if (self.getMonitorFromWindow(currentForegroundWindow)) |monitor| {
+            self.currentMonitor = monitor.index;
+            monitor.setCurrentWindow(currentForegroundWindow);
+        }
+
         self.layoutWindowsOnAllMonitors();
         self.rerenderOverlay();
 
@@ -247,7 +263,33 @@ pub const WindowManager = struct {
             std.log.err("Failed to add tray icon", .{});
         }
 
+        self.contextMenu = self.createContextMenu() catch |err| blk: {
+            std.log.err("Failed to create context menu: {}, {}", .{ err, GetLastError() });
+            break :blk null;
+        };
+
         std.log.debug("WindowManager.setup done", .{});
+    }
+
+    fn createContextMenu(self: *Self) !HMENU {
+        const menu = @ptrCast(?HMENU, CreatePopupMenu());
+        if (menu == null) {
+            return error.FailedToCreatePopupMenu;
+        }
+
+        var exitName: [4:0]u8 = .{ 'E', 'x', 'i', 't' };
+        var menuInfo = zeroInitializedWithSize(MENUITEMINFOA);
+        menuInfo.fMask = MENU_ITEM_MASK.initFlags(.{ .STRING = 1 });
+        menuInfo.fType = MENU_ITEM_TYPE.initFlags(.{ .STRING = 1 });
+        menuInfo.fState = MENU_ITEM_STATE.initFlags(.{ .ENABLED = 1 });
+        menuInfo.dwTypeData = exitName[0..];
+        menuInfo.cch = exitName.len;
+
+        if (InsertMenuItemA(menu.?, 0, TRUE, &menuInfo) == FALSE) {
+            return error.FailedToInsertMenuItem;
+        }
+
+        return menu.?;
     }
 
     fn addTrayIcon(self: *Self) !void {
@@ -282,7 +324,7 @@ pub const WindowManager = struct {
         });
         data.uCallbackMessage = WM_TRAYCALLBACK;
         data.hIcon = trayIcon;
-        std.mem.copy(u8, &data.szTip, "Tip123");
+        std.mem.copy(u8, &data.szTip, "zwtwm");
         data.guidItem = root.TRAY_GUID;
         if (Shell_NotifyIconA(.ADD, &data) == 0) {
             return error.FailedToAddTrayIcon;
@@ -392,6 +434,9 @@ pub const WindowManager = struct {
                     self.layoutWindows();
                 }
                 self.rerenderOverlay();
+
+                // Close the context menu.
+                _ = EndMenu();
             },
 
             EVENT_SYSTEM_MOVESIZESTART => {
@@ -493,6 +538,21 @@ pub const WindowManager = struct {
                 self.rerenderOverlay();
             },
 
+            WM_COMMAND => {
+                var self = @intToPtr(*WindowManager, @bitCast(usize, GetWindowLongPtrA(hwnd, GWLP_USERDATA)));
+                const id = wParam & 0xffff;
+
+                switch (id) {
+                    CONTEXT_MENU_EXIT => {
+                        std.log.info("Exit zwtwm through context menu", .{});
+                        PostQuitMessage(0);
+                    },
+                    else => {
+                        std.log.err("Unknown menu id: {}", .{id});
+                    },
+                }
+            },
+
             WM_HOTKEY => {
                 var self = @intToPtr(*WindowManager, @bitCast(usize, GetWindowLongPtrA(hwnd, GWLP_USERDATA)));
             },
@@ -516,15 +576,33 @@ pub const WindowManager = struct {
             },
 
             WM_TRAYCALLBACK => {
+                var self = @intToPtr(*WindowManager, @bitCast(usize, GetWindowLongPtrA(hwnd, GWLP_USERDATA)));
                 const notificationEvent = lParam & 0xffff;
                 const iconId = (lParam >> 16) & 0xffff;
+                const x = @intCast(i32, wParam & 0xffff);
+                const y = @intCast(i32, (wParam >> 16) & 0xffff);
 
                 switch (notificationEvent) {
                     NIN_SELECT => {
-                        std.log.notice("NIN_SELECT", .{});
+                        std.log.debug("NIN_SELECT", .{});
                     },
                     WM_CONTEXTMENU => {
-                        std.log.notice("WM_CONTEXTMENU", .{});
+                        if (self.contextMenu) |menu| {
+                            if (TrackPopupMenuEx(
+                                menu,
+                                @enumToInt(TRACK_POPUP_MENU_FLAGS.initFlags(.{
+                                    .NOANIMATION = 1,
+                                    .RIGHTBUTTON = 1,
+                                    .RIGHTALIGN = if (GetSystemMetrics(SM_MENUDROPALIGNMENT) != 0) 1 else 0,
+                                })),
+                                x,
+                                y,
+                                self.monitors.items[0].overlayWindow,
+                                null,
+                            ) == FALSE) {
+                                std.log.err("Failed to show context menu: {}", .{GetLastError()});
+                            }
+                        }
                     },
                     else => {
                         //std.log.notice("Traycallback: {}, {}, {x}, {x}, {}, {}", .{ wParam, lParam, notificationEvent, iconId, x, y });
@@ -1142,13 +1220,13 @@ pub const WindowManager = struct {
     }
 
     fn cmdIncreaseGap(self: *Self, args: HotkeyArgs) void {
-        self.config.gap += 5;
+        self.config.gap += @intCast(i32, args.intParam);
         self.layoutWindowsOnAllMonitors();
         self.rerenderOverlay();
     }
 
     fn cmdDecreaseGap(self: *Self, args: HotkeyArgs) void {
-        self.config.gap -= 5;
+        self.config.gap -= @intCast(i32, args.intParam);
         if (self.config.gap < 0) {
             self.config.gap = 0;
         }
@@ -1157,7 +1235,7 @@ pub const WindowManager = struct {
     }
 
     fn cmdIncreaseSplit(self: *Self, args: HotkeyArgs) void {
-        self.config.splitRatio += 0.025;
+        self.config.splitRatio += args.floatParam;
         if (self.config.splitRatio > 0.9) {
             self.config.splitRatio = 0.9;
         }
@@ -1166,7 +1244,7 @@ pub const WindowManager = struct {
     }
 
     fn cmdDecreaseSplit(self: *Self, args: HotkeyArgs) void {
-        self.config.splitRatio -= 0.025;
+        self.config.splitRatio -= args.floatParam;
         if (self.config.splitRatio < 0.1) {
             self.config.splitRatio = 0.1;
         }

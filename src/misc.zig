@@ -255,3 +255,16 @@ pub fn setWindowRect(hwnd: HWND, rect: RECT, flags: GetFirstParamType(SET_WINDOW
         return error.FailedToSetWindowPosition;
     }
 }
+
+pub fn zeroInitialized(comptime T: type) T {
+    var result: T = undefined;
+    std.mem.set(u8, std.mem.asBytes(&result), 0);
+    return result;
+}
+
+pub fn zeroInitializedWithSize(comptime T: type) T {
+    var result: T = undefined;
+    std.mem.set(u8, std.mem.asBytes(&result), 0);
+    result.cbSize = @sizeOf(T);
+    return result;
+}

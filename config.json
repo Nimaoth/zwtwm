@@ -54,20 +54,24 @@
     "hotkeys": [
         {
             "key": "ctrl alt shift Y",
-            "command": "decreaseGap"
+            "command": "decreaseGap",
+            "args": { "intParam": 5 }
         },
         {
             "key": "ctrl alt shift P",
-            "command": "increaseGap"
+            "command": "increaseGap",
+            "args": { "intParam": 5 }
         },
 
         {
             "key": "ctrl alt Y",
-            "command": "decreaseSplit"
+            "command": "decreaseSplit",
+            "args": { "floatParam": 0.025 }
         },
         {
             "key": "ctrl alt P",
-            "command": "increaseSplit"
+            "command": "increaseSplit",
+            "args": { "floatParam": 0.025 }
         },
 
         {
