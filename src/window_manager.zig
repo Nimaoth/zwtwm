@@ -14,6 +14,7 @@ usingnamespace @import("config.zig");
 const NIN_KEYSELECT = NIN_SELECT | 1;
 
 const CONTEXT_MENU_EXIT = 0;
+const CONTEXT_MENU_TOGGLE_ENABLED = 1;
 const WM_WINDOW_CREATED = WM_USER + 1;
 const WM_TRAYCALLBACK = WM_APP + 1;
 const HK_CLOSE_WINDOW: i32 = 42069;
@@ -76,6 +77,8 @@ pub const WindowManager = struct {
     hHookObjectMoved: HWINEVENTHOOK,
 
     config: Config,
+
+    isEnabled: bool = true,
 
     pub fn init(allocator: *std.mem.Allocator) !Self {
         std.log.debug("WindowManager.init", .{});
@@ -277,19 +280,58 @@ pub const WindowManager = struct {
             return error.FailedToCreatePopupMenu;
         }
 
-        var exitName: [4:0]u8 = .{ 'E', 'x', 'i', 't' };
-        var menuInfo = zeroInitializedWithSize(MENUITEMINFOA);
-        menuInfo.fMask = MENU_ITEM_MASK.initFlags(.{ .STRING = 1 });
-        menuInfo.fType = MENU_ITEM_TYPE.initFlags(.{ .STRING = 1 });
-        menuInfo.fState = MENU_ITEM_STATE.initFlags(.{ .ENABLED = 1 });
-        menuInfo.dwTypeData = exitName[0..];
-        menuInfo.cch = exitName.len;
+        var menuInfo = zeroInitializedWithSize(MENUINFO);
+        menuInfo.fMask = MENUINFO_MASK.initFlags(.{ .STYLE = 1 });
+        menuInfo.dwStyle = MENUINFO_STYLE.initFlags(.{ .NOTIFYBYPOS = 1 });
+        if (SetMenuInfo(menu.?, &menuInfo) == 0) {
+            return error.FailedToSetMenuInfo;
+        }
 
-        if (InsertMenuItemA(menu.?, 0, TRUE, &menuInfo) == FALSE) {
+        var exitName = "Exit".*;
+        var exitInfo = zeroInitializedWithSize(MENUITEMINFOA);
+        exitInfo.fMask = MENU_ITEM_MASK.initFlags(.{ .STRING = 1 });
+        exitInfo.fType = MENU_ITEM_TYPE.initFlags(.{ .STRING = 1 });
+        exitInfo.dwTypeData = exitName[0..];
+        exitInfo.cch = exitName.len;
+
+        if (InsertMenuItemA(menu.?, CONTEXT_MENU_EXIT, TRUE, &exitInfo) == FALSE) {
+            return error.FailedToInsertMenuItem;
+        }
+
+        var disableName = "Disable".*;
+        var disableInfo = zeroInitializedWithSize(MENUITEMINFOA);
+        disableInfo.fMask = MENU_ITEM_MASK.initFlags(.{ .STRING = 1 });
+        disableInfo.fType = MENU_ITEM_TYPE.initFlags(.{ .STRING = 1 });
+        disableInfo.dwTypeData = disableName[0..];
+        disableInfo.cch = disableName.len;
+
+        if (InsertMenuItemA(menu.?, CONTEXT_MENU_TOGGLE_ENABLED, TRUE, &disableInfo) == FALSE) {
             return error.FailedToInsertMenuItem;
         }
 
         return menu.?;
+    }
+
+    fn updateToggleEnabledMenuItem(self: *Self) void {
+        if (self.contextMenu == null) return;
+
+        var disableName = "Disable".*;
+        var enableName = "Enable".*;
+
+        var info = zeroInitializedWithSize(MENUITEMINFOA);
+        info.fMask = MENU_ITEM_MASK.initFlags(.{ .STRING = 1 });
+        info.fType = MENU_ITEM_TYPE.initFlags(.{ .STRING = 1 });
+        if (self.isEnabled) {
+            info.dwTypeData = disableName[0..];
+            info.cch = disableName.len;
+        } else {
+            info.dwTypeData = enableName[0..];
+            info.cch = enableName.len;
+        }
+
+        if (SetMenuItemInfoA(self.contextMenu.?, CONTEXT_MENU_TOGGLE_ENABLED, TRUE, &info) == FALSE) {
+            std.log.err("Failed to update menu item: {}", .{GetLastError()});
+        }
     }
 
     fn addTrayIcon(self: *Self) !void {
@@ -538,14 +580,20 @@ pub const WindowManager = struct {
                 self.rerenderOverlay();
             },
 
-            WM_COMMAND => {
+            WM_MENUCOMMAND => {
                 var self = @intToPtr(*WindowManager, @bitCast(usize, GetWindowLongPtrA(hwnd, GWLP_USERDATA)));
                 const id = wParam & 0xffff;
+                //std.log.err("WM_MENUCOMMAND: {x}, {x}", .{ wParam, lParam });
 
                 switch (id) {
                     CONTEXT_MENU_EXIT => {
                         std.log.info("Exit zwtwm through context menu", .{});
                         PostQuitMessage(0);
+                    },
+                    CONTEXT_MENU_TOGGLE_ENABLED => {
+                        self.isEnabled = !self.isEnabled;
+                        self.updateToggleEnabledMenuItem();
+                        std.log.info("Toggle enabled", .{});
                     },
                     else => {
                         std.log.err("Unknown menu id: {}", .{id});
@@ -592,7 +640,6 @@ pub const WindowManager = struct {
                                 menu,
                                 @enumToInt(TRACK_POPUP_MENU_FLAGS.initFlags(.{
                                     .NOANIMATION = 1,
-                                    .RIGHTBUTTON = 1,
                                     .RIGHTALIGN = if (GetSystemMetrics(SM_MENUDROPALIGNMENT) != 0) 1 else 0,
                                 })),
                                 x,

@@ -28,7 +28,6 @@
         "PowerLauncher.exe",
         "TextInputHost.exe",
         "ShellExperienceHost.exe",
-        "EpicGamesLauncher.exe",
         "SystemSettings.exe",
         "WinStore.App.exe",
         "ApplicationFrameHost.exe"
@@ -44,11 +43,14 @@
         "TaskManagerWindow",
         "OperationStatusWindow",
         "Main HighGUI class",
-        "WindowsForms10.Window.8.app.0.3e799b_r6_ad1"
+        "WindowsForms10.Window.8.app.0.3e799b_r6_ad1",
+        "TSC_POPUP_PARENT_WNDCLASS",
+        "BBarWindowClass"
     ],
 
     "ignoredTitles": [
-        ""
+        "",
+        "Microsoft Teams Notification"
     ],
 
     "hotkeys": [
