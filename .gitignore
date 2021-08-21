@@ -1,4 +1,5 @@
 zig-cache
-/window_data.json
-/dist
+window_data.json
+dist
+.vs
 log.txt

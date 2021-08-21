@@ -172,7 +172,7 @@ pub fn setWindowVisibility(hwnd: HWND, shouldBeVisible: bool) void {
     }
 
     if (shouldBeVisible) {
-        _ = ShowWindow(hwnd, SW_RESTORE);
+        _ = ShowWindow(hwnd, SW_SHOW);
     } else {
         _ = ShowWindow(hwnd, SW_HIDE);
     }

@@ -455,7 +455,7 @@ pub const WindowManager = struct {
                         std.log.err("Failed to manage window {}:{s}: '{s}'", .{ hwnd, className.value, windowTitle.value });
                         return;
                     };
-                    monitor.currentWindow = 0;
+                    monitor.getCurrentLayer().currentWindow = 0;
                     monitor.layoutWindows();
                     self.rerenderOverlay();
                 }
@@ -1267,12 +1267,14 @@ pub const WindowManager = struct {
     }
 
     fn cmdIncreaseGap(self: *Self, args: HotkeyArgs) void {
+        std.log.debug("cmdIncreaseGap: {}", .{args});
         self.config.gap += @intCast(i32, args.intParam);
         self.layoutWindowsOnAllMonitors();
         self.rerenderOverlay();
     }
 
     fn cmdDecreaseGap(self: *Self, args: HotkeyArgs) void {
+        std.log.debug("cmdDecreaseGap: {}", .{args});
         self.config.gap -= @intCast(i32, args.intParam);
         if (self.config.gap < 0) {
             self.config.gap = 0;
@@ -1282,6 +1284,7 @@ pub const WindowManager = struct {
     }
 
     fn cmdIncreaseSplit(self: *Self, args: HotkeyArgs) void {
+        std.log.debug("cmdIncreaseSplit: {}", .{args});
         self.config.splitRatio += args.floatParam;
         if (self.config.splitRatio > 0.9) {
             self.config.splitRatio = 0.9;
@@ -1291,6 +1294,7 @@ pub const WindowManager = struct {
     }
 
     fn cmdDecreaseSplit(self: *Self, args: HotkeyArgs) void {
+        std.log.debug("cmdDecreaseSplit: {}", .{args});
         self.config.splitRatio -= args.floatParam;
         if (self.config.splitRatio < 0.1) {
             self.config.splitRatio = 0.1;
@@ -1300,30 +1304,66 @@ pub const WindowManager = struct {
     }
 
     fn cmdMoveCurrentWindowToLayer(self: *Self, args: HotkeyArgs) void {
+        std.log.debug("cmdMoveCurrentWindowToLayer: {}", .{args});
         self.getCurrentMonitor().moveCurrentWindowToLayer(args.usizeParam);
     }
 
     fn cmdToggleCurrentWindowOnLayer(self: *Self, args: HotkeyArgs) void {
+        std.log.debug("cmdToggleCurrentWindowOnLayer: {}", .{args});
         self.getCurrentMonitor().toggleCurrentWindowOnLayer(args.usizeParam);
     }
 
     fn cmdSwitchLayer(self: *Self, args: HotkeyArgs) void {
-        std.log.info("cmdSwitchLayer({}, {})", .{ args.usizeParam, args.boolParam });
+        std.log.debug("cmdSwitchLayer: {}", .{args});
         if (args.boolParam) {
-            for (self.monitors.items) |*monitor| {
-                monitor.switchLayer(args.usizeParam, true);
-            }
+            var windowsToHide = std.ArrayList(*Window).init(self.allocator);
+            defer windowsToHide.deinit();
 
+            for (self.monitors.items) |*monitor| {
+                monitor.switchLayer(args.usizeParam, &windowsToHide);
+            }
             self.focusCurrentWindow();
             self.layoutWindowsOnAllMonitors();
+
+            for (self.monitors.items) |*monitor| {
+                monitor.bringCurrentWindowToTop();
+            }
+
             self.rerenderOverlay();
+
+            // Just for aesthetics, so the above windows will be show before
+            // the other windows get hidden, which prevents a short flicker.
+            // @todo: is there a better way to do this?
+            Sleep(15);
+
+            // Hide windows in the current layer except ones that are also on the target layer.
+            for (windowsToHide.items) |window| {
+                setWindowVisibility(window.hwnd, false);
+            }
         } else {
-            self.getCurrentMonitor().switchLayer(args.usizeParam, false);
+            var windowsToHide = std.ArrayList(*Window).init(self.allocator);
+            defer windowsToHide.deinit();
+
+            self.getCurrentMonitor().switchLayer(args.usizeParam, &windowsToHide);
+            self.focusCurrentWindow();
+            self.layoutWindows();
+            self.getCurrentMonitor().bringCurrentWindowToTop();
+            self.rerenderOverlay();
+
+            // Just for aesthetics, so the above windows will be show before
+            // the other windows get hidden, which prevents a short flicker.
+            // @todo: is there a better way to do this?
+            Sleep(15);
+
+            // Hide windows in the current layer except ones that are also on the target layer.
+            for (windowsToHide.items) |window| {
+                setWindowVisibility(window.hwnd, false);
+            }
         }
     }
 
     fn cmdLayerCommand(self: *Self, args: HotkeyArgs) void {
-        std.log.info("Layer command", .{});
+        std.log.debug("cmdLayerCommand: {}", .{args});
         switch (self.currentCommand) {
             .None => self.cmdSwitchLayer(args),
             .ToggleWindowOnLayer => self.cmdToggleCurrentWindowOnLayer(args),
@@ -1333,17 +1373,17 @@ pub const WindowManager = struct {
     }
 
     fn cmdMoveNextWindowToLayer(self: *Self, args: HotkeyArgs) void {
-        std.log.info("Move next window to layer", .{});
+        std.log.debug("cmdMoveNextWindowToLayer: {}", .{args});
         self.nextCommand = .MoveWindowToLayer;
     }
 
     fn cmdToggleNextWindowOnLayer(self: *Self, args: HotkeyArgs) void {
-        std.log.info("Toggle next window on layer", .{});
+        std.log.debug("cmdToggleNextWindowOnLayer: {}", .{args});
         self.nextCommand = .ToggleWindowOnLayer;
     }
 
     fn cmdGoToPrevMonitor(self: *Self, args: HotkeyArgs) void {
-        std.log.info("cmdGoToPrevMonitor", .{});
+        std.log.debug("cmdGoToPrevMonitor: {}", .{args});
         if (self.monitors.items.len < 2) {
             // Only zero/one monitor, nothing to do.
             return;
@@ -1354,7 +1394,7 @@ pub const WindowManager = struct {
     }
 
     fn cmdGoToNextMonitor(self: *Self, args: HotkeyArgs) void {
-        std.log.info("cmdGoToNextMonitor", .{});
+        std.log.debug("cmdGoToNextMonitor: {}", .{args});
         if (self.monitors.items.len < 2) {
             // Only zero/one monitor, nothing to do.
             return;
@@ -1365,6 +1405,7 @@ pub const WindowManager = struct {
     }
 
     fn cmdMoveWindowToPrevMonitor(self: *Self, args: HotkeyArgs) void {
+        std.log.debug("cmdMoveWindowToPrevMonitor: {}", .{args});
         if (self.monitors.items.len < 2) {
             // Only zero/one monitor, nothing to do.
             return;
@@ -1378,7 +1419,7 @@ pub const WindowManager = struct {
 
         if (srcMonitor.getCurrentWindow()) |window| {
             self.moveWindowToMonitor(window.hwnd, srcMonitor, dstMonitor, 0);
-            dstMonitor.currentWindow = 0;
+            dstMonitor.getCurrentLayer().currentWindow = 0;
         }
 
         self.setCurrentMonitor(dstMonitor.hmonitor);
@@ -1389,6 +1430,7 @@ pub const WindowManager = struct {
     }
 
     fn cmdMoveWindowToNextMonitor(self: *Self, args: HotkeyArgs) void {
+        std.log.debug("cmdMoveWindowToNextMonitor: {}", .{args});
         if (self.monitors.items.len < 2) {
             // Only zero/one monitor, nothing to do.
             return;
@@ -1402,7 +1444,7 @@ pub const WindowManager = struct {
 
         if (srcMonitor.getCurrentWindow()) |window| {
             self.moveWindowToMonitor(window.hwnd, srcMonitor, dstMonitor, 0);
-            dstMonitor.currentWindow = 0;
+            dstMonitor.getCurrentLayer().currentWindow = 0;
         }
 
         self.setCurrentMonitor(dstMonitor.hmonitor);
@@ -1413,10 +1455,12 @@ pub const WindowManager = struct {
     }
 
     fn cmdToggleWindowFullscreen(self: *Self, args: HotkeyArgs) void {
+        std.log.debug("cmdToggleWindowFullscreen: {}", .{args});
         self.getCurrentMonitor().toggleWindowFullscreen();
     }
 
     fn cmdToggleForegroundWindowManaged(self: *Self, args: HotkeyArgs) void {
+        std.log.debug("cmdToggleForegroundWindowManaged: {}", .{args});
         const hwnd = GetForegroundWindow();
         if (self.isWindowManaged(hwnd)) {
             self.removeManagedWindow(hwnd);
@@ -1431,14 +1475,17 @@ pub const WindowManager = struct {
     }
 
     fn cmdSelectPrevWindow(self: *Self, args: HotkeyArgs) void {
+        std.log.debug("cmdSelectPrevWindow: {}", .{args});
         self.getCurrentMonitor().selectPrevWindow();
     }
 
     fn cmdSelectNextWindow(self: *Self, args: HotkeyArgs) void {
+        std.log.debug("cmdSelectNextWindow: {}", .{args});
         self.getCurrentMonitor().selectNextWindow();
     }
 
     fn cmdMoveCurrentWindowToTop(self: *Self, args: HotkeyArgs) void {
+        std.log.debug("cmdMoveCurrentWindowToTop: {}", .{args});
         self.getCurrentMonitor().moveCurrentWindowToTop();
         self.focusCurrentWindow();
         self.layoutWindows();
@@ -1446,6 +1493,7 @@ pub const WindowManager = struct {
     }
 
     fn cmdMoveWindowUp(self: *Self, args: HotkeyArgs) void {
+        std.log.debug("cmdMoveWindowUp: {}", .{args});
         self.getCurrentMonitor().moveCurrentWindowUp();
         self.focusCurrentWindow();
         self.layoutWindows();
@@ -1453,6 +1501,7 @@ pub const WindowManager = struct {
     }
 
     fn cmdMoveWindowDown(self: *Self, args: HotkeyArgs) void {
+        std.log.debug("cmdMoveWindowDown: {}", .{args});
         self.getCurrentMonitor().moveCurrentWindowDown();
         self.focusCurrentWindow();
         self.layoutWindows();
@@ -1460,6 +1509,7 @@ pub const WindowManager = struct {
     }
 
     fn cmdPrintForegroundWindowInfo(self: *Self, args: HotkeyArgs) void {
+        std.log.debug("cmdPrintForegroundWindowInfo: {}", .{args});
         const hwnd = GetForegroundWindow();
         var className = getWindowString(hwnd, GetClassNameA, .{}, root.gWindowStringArena) catch return;
         defer className.deinit();

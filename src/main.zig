@@ -13,7 +13,6 @@ pub const ONLY_USE_HALF_MONITOR = false;
 pub const TRAY_GUID = Guid.initString(BuildOptions.TRAY_GUID);
 
 const LOG_TO_FILE = !BuildOptions.RUN_IN_CONSOLE;
-const LOG_FILE_PATH = "log.txt";
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 pub var gWindowManager: WindowManager = undefined;
 pub var gWindowStringArena: *std.mem.Allocator = undefined;
@@ -22,21 +21,56 @@ var gLogFile: ?std.fs.File = undefined;
 
 pub const log_level: std.log.Level = switch (std.builtin.mode) {
     .Debug => .debug,
-    .ReleaseSafe => .info,
+    .ReleaseSafe => .debug,
     .ReleaseFast => .err,
     .ReleaseSmall => .err,
 };
 
 pub fn main() anyerror!void {
+    defer _ = gpa.deinit();
+
     if (LOG_TO_FILE) {
-        gLogFile = try std.fs.cwd().createFile(LOG_FILE_PATH, .{});
+        const time = @divFloor(std.time.milliTimestamp(), std.time.ms_per_s);
+        var fileNameBuffer = std.ArrayList(u8).init(&gpa.allocator);
+        if (std.fmt.format(fileNameBuffer.writer(), "log-{}.txt", .{time})) {
+            gLogFile = try std.fs.cwd().createFile(fileNameBuffer.items, .{});
+        } else |err| {
+            gLogFile = try std.fs.cwd().createFile("log.txt", .{});
+        }
     }
     defer if (gLogFile) |logFile| {
         logFile.close();
     };
 
-    defer _ = gpa.deinit();
+    zwtwmMain() catch |err| {
+        std.log.crit("{}", .{err});
 
+        if (gLogFile) |logFile| {
+            if (@errorReturnTrace()) |trace| {
+                writeStackTraceToLogFile(logFile.writer(), trace.*);
+            }
+        } else {
+            return err;
+        }
+    };
+    std.log.notice("Terminating zwtwm", .{});
+}
+
+fn writeStackTraceToLogFile(writer: anytype, trace: std.builtin.StackTrace) void {
+    nosuspend {
+        if (!std.builtin.strip_debug_info) {
+            const debug_info = std.debug.getSelfDebugInfo() catch |err| {
+                writer.print("Unable to dump stack trace: Unable to open debug info: {s}\n", .{@errorName(err)}) catch return;
+                return;
+            };
+            std.debug.writeStackTrace(trace, writer, &gpa.allocator, debug_info, std.debug.detectTTYConfig()) catch |err| {
+                writer.print("Unable to dump stack trace: {s}\n", .{@errorName(err)}) catch return;
+                return;
+            };
+        }
+    }
+}
+pub fn zwtwmMain() anyerror!void {
     var windowStringArena = std.heap.ArenaAllocator.init(&gpa.allocator);
     defer windowStringArena.deinit();
     gWindowStringArena = &windowStringArena.allocator;

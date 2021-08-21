@@ -40,6 +40,7 @@ pub const Layer = struct {
     const Self = @This();
 
     windows: std.ArrayList(Window),
+    currentWindow: usize = 0,
     fullscreen: bool = false,
     options: Options = .{},
 
@@ -126,6 +127,13 @@ pub const Layer = struct {
         }
     }
 
+    pub fn getCurrentWindow(self: *Self) ?*Window {
+        if (self.currentWindow >= self.windows.items.len) {
+            return null;
+        }
+        return &self.windows.items[self.currentWindow];
+    }
+
     pub fn getWindowAt(self: *Self, index: usize) ?*Window {
         if (index >= self.windows.items.len) {
             return null;
@@ -157,6 +165,14 @@ pub const Layer = struct {
 
     pub fn sortWindows(self: *Self) void {
         std.sort.sort(Window, self.windows.items, self, Self.compareWindowIndex);
+    }
+
+    pub fn clampCurrentWindowIndex(self: *Self) void {
+        if (self.windows.items.len == 0) {
+            self.currentWindow = 0;
+        } else if (self.currentWindow >= self.windows.items.len) {
+            self.currentWindow = self.windows.items.len - 1;
+        }
     }
 
     fn compareWindowIndex(context: *Self, a: Window, b: Window) bool {

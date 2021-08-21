@@ -17,7 +17,6 @@ pub const Monitor = struct {
 
     layers: std.ArrayList(Layer),
     currentLayer: usize = 0,
-    currentWindow: usize = 0,
 
     index: usize = 0,
     hmonitor: HMONITOR,
@@ -181,7 +180,7 @@ pub const Monitor = struct {
         var layer = self.getCurrentLayer();
         try layer.addWindow(hwnd, index);
         if (index) |i| {
-            self.currentWindow = i;
+            layer.currentWindow = i;
         }
     }
 
@@ -190,25 +189,21 @@ pub const Monitor = struct {
             return;
         }
 
-        var removedIndex: usize = 0;
         for (self.layers.items) |*layer, i| {
-            const k = layer.removeWindow(hwnd);
-            if (i == self.currentLayer) {
-                removedIndex = k;
-            }
-        }
+            const removedIndex = layer.removeWindow(hwnd);
 
-        if (removedIndex < self.currentWindow) {
-            self.currentWindow -= 1;
+            if (removedIndex < layer.currentWindow) {
+                layer.currentWindow -= 1;
+            }
+            layer.clampCurrentWindowIndex();
         }
-        self.clampCurrentWindowIndex();
     }
 
     pub fn setCurrentWindow(self: *Self, hwnd: HWND) void {
         const layer = self.getCurrentLayer();
 
         if (layer.getWindowIndex(hwnd)) |index| {
-            self.currentWindow = index;
+            layer.currentWindow = index;
         }
     }
 
@@ -222,24 +217,15 @@ pub const Monitor = struct {
     }
 
     pub fn getCurrentWindow(self: *Self) ?*Window {
-        return self.getCurrentLayer().getWindowAt(self.currentWindow);
-    }
-
-    pub fn clampCurrentWindowIndex(self: *Self) void {
-        const layer = self.getCurrentLayer();
-        if (layer.windows.items.len == 0) {
-            self.currentWindow = 0;
-        } else if (self.currentWindow >= layer.windows.items.len) {
-            self.currentWindow = layer.windows.items.len - 1;
-        }
+        return self.getCurrentLayer().getCurrentWindow();
     }
 
     pub fn selectPrevWindow(self: *Self) void {
         const layer = self.getCurrentLayer();
         if (layer.windows.items.len == 0) {
-            self.currentWindow = 0;
+            layer.currentWindow = 0;
         } else {
-            self.currentWindow = moveIndex(self.currentWindow, -1, layer.windows.items.len, self.windowManager.config.wrapWindows);
+            layer.currentWindow = moveIndex(layer.currentWindow, -1, layer.windows.items.len, self.windowManager.config.wrapWindows);
         }
 
         self.focusCurrentWindow();
@@ -250,9 +236,9 @@ pub const Monitor = struct {
     pub fn selectNextWindow(self: *Self) void {
         const layer = self.getCurrentLayer();
         if (layer.windows.items.len == 0) {
-            self.currentWindow = 0;
+            layer.currentWindow = 0;
         } else {
-            self.currentWindow = moveIndex(self.currentWindow, 1, layer.windows.items.len, self.windowManager.config.wrapWindows);
+            layer.currentWindow = moveIndex(layer.currentWindow, 1, layer.windows.items.len, self.windowManager.config.wrapWindows);
         }
 
         self.focusCurrentWindow();
@@ -263,34 +249,39 @@ pub const Monitor = struct {
     pub fn moveWindowToIndex(self: *Self, srcIndex: usize, dstIndex: usize) void {
         const layer = self.getCurrentLayer();
         layer.moveWindowToIndex(srcIndex, dstIndex);
-        self.currentWindow = dstIndex;
+        layer.currentWindow = dstIndex;
     }
 
     pub fn moveCurrentWindowUp(self: *Self) void {
         const layer = self.getCurrentLayer();
-        const dstIndex = moveIndex(self.currentWindow, -1, layer.windows.items.len, self.windowManager.config.wrapWindows);
-        layer.moveWindowToIndex(self.currentWindow, dstIndex);
-        self.currentWindow = dstIndex;
+        const dstIndex = moveIndex(layer.currentWindow, -1, layer.windows.items.len, self.windowManager.config.wrapWindows);
+        layer.moveWindowToIndex(layer.currentWindow, dstIndex);
+        layer.currentWindow = dstIndex;
     }
 
     pub fn moveCurrentWindowDown(self: *Self) void {
         const layer = self.getCurrentLayer();
-        const dstIndex = moveIndex(self.currentWindow, 1, layer.windows.items.len, self.windowManager.config.wrapWindows);
-        layer.moveWindowToIndex(self.currentWindow, dstIndex);
-        self.currentWindow = dstIndex;
+        const dstIndex = moveIndex(layer.currentWindow, 1, layer.windows.items.len, self.windowManager.config.wrapWindows);
+        layer.moveWindowToIndex(layer.currentWindow, dstIndex);
+        layer.currentWindow = dstIndex;
     }
 
     pub fn moveCurrentWindowToTop(self: *Self) void {
-        self.moveWindowToIndex(self.currentWindow, 0);
+        self.moveWindowToIndex(self.getCurrentLayer().currentWindow, 0);
     }
 
     pub fn moveCurrentWindowToIndex(self: *Self, index: usize) void {
-        self.moveWindowToIndex(self.currentWindow, index);
+        self.moveWindowToIndex(self.getCurrentLayer().currentWindow, index);
     }
 
+    pub fn bringCurrentWindowToTop(self: *Self) void {
+        if (self.getCurrentWindow()) |window| {
+            _ = BringWindowToTop(window.hwnd);
+        }
+    }
     pub fn focusCurrentWindow(self: *Self) void {
         const layer = self.getCurrentLayer();
-        if (layer.getWindowAt(self.currentWindow)) |window| {
+        if (layer.getWindowAt(layer.currentWindow)) |window| {
             _ = SetForegroundWindow(window.hwnd);
         }
     }
@@ -318,144 +309,100 @@ pub const Monitor = struct {
         const maximizeFullSizeWindows = self.windowManager.config.maximizeFullSizeWindows;
         const noGapForSingleWindow = self.windowManager.config.noGapForSingleWindow;
 
-        var area = RECT{
+        const monitorAreaWithGap = RECT{
             .left = monitorArea.left + gap,
             .top = monitorArea.top + gap,
             .right = monitorArea.right - gap,
             .bottom = monitorArea.bottom - gap,
         };
+        var area = monitorAreaWithGap;
+
+        const singleWindow = layer.fullscreen or (layer.windows.items.len == 1);
 
         const numWindows: i32 = @intCast(i32, layer.windows.items.len);
         if (numWindows > 0) {
-            if (layer.fullscreen) {
-                const window = layer.getWindowAt(self.currentWindow).?;
+            var currentWindowFullscreen = false;
+            if (self.getCurrentWindow()) |window| {
+                currentWindowFullscreen = windowHasRect(window.hwnd, self.rect) catch false;
+            }
 
-                if (maximizeFullSizeWindows) {
+            var hdwp = BeginDeferWindowPos(@intCast(i32, numWindows));
+            if (hdwp == 0) {
+                return;
+            }
+
+            var x: i32 = area.left;
+            for (layer.windows.items) |*window, i| {
+                if (windowHasRect(window.hwnd, self.rect) catch false) {
+                    // Special case: window is in true fullscreen mode (meaning the entire screen, including the task bar).
+                    // In this case we don't want to mess with the window.
+                    window.rect = self.rect;
+                    continue;
+                }
+
+                if (singleWindow and maximizeFullSizeWindows) {
                     window.rect = monitorArea;
                     maximizeWindowOnMonitor(window.hwnd, self.hmonitor) catch {};
-                } else {
-                    if (windowHasRect(window.hwnd, self.rect) catch false) {
-                        // Special case: window is in true fullscreen mode (meaning the entire screen, including the task bar).
-                        // In this case we don't want to mess with the window.
-                        window.rect = self.rect;
+                    continue;
+                }
+
+                if (isWindowMaximized(window.hwnd) catch false) {
+                    std.log.debug("Restoring window because it is maximized: {}", .{window.hwnd});
+                    _ = ShowWindow(window.hwnd, SW_RESTORE);
+                }
+
+                var windowArea = area;
+                if (i + 1 < layer.windows.items.len) {
+                    // More windows after this one.
+                    const horizontalOrVertical = if (root.ONLY_USE_HALF_MONITOR) 1 else 0;
+                    if (@mod(i, 2) == horizontalOrVertical) {
+                        const ratio = if (i == 0) splitRatio else 0.5;
+                        const split = @floatToInt(i32, @intToFloat(f64, windowArea.right - windowArea.left) * ratio);
+
+                        area.left += split + gap;
+                        windowArea.right = windowArea.left + split;
                     } else {
-                        if (isWindowMaximized(window.hwnd) catch false) {
-                            std.log.debug("Restoring window because it is maximized: {}", .{window.hwnd});
-                            _ = ShowWindow(window.hwnd, SW_RESTORE);
-                        }
+                        const ratio = if (i == 0) splitRatio else 0.5;
+                        const split = @floatToInt(i32, @intToFloat(f64, windowArea.bottom - windowArea.top) * ratio);
 
-                        if (noGapForSingleWindow) {
-                            window.rect = monitorArea;
-                        } else {
-                            window.rect = area;
-                        }
-
-                        const visualRect = getRectWithoutBorder(window.hwnd, window.rect);
-                        setWindowRect(window.hwnd, visualRect, .{}) catch {
-                            std.log.err("Failed to set window position of {}", .{window.hwnd});
-                        };
+                        area.top += split + gap;
+                        windowArea.bottom = windowArea.top + split;
                     }
                 }
-            } else {
-                var hdwp = BeginDeferWindowPos(@intCast(i32, numWindows));
+
+                if (singleWindow) {
+                    windowArea = if (noGapForSingleWindow) monitorArea else monitorAreaWithGap;
+                }
+
+                window.rect = windowArea;
+
+                const visualRect = getRectWithoutBorder(window.hwnd, window.rect);
+                hdwp = DeferWindowPos(
+                    hdwp,
+                    window.hwnd,
+                    null,
+                    visualRect.left,
+                    visualRect.top,
+                    visualRect.right - visualRect.left,
+                    visualRect.bottom - visualRect.top,
+                    SET_WINDOW_POS_FLAGS.initFlags(.{
+                        .NOOWNERZORDER = 1,
+                        .SHOWWINDOW = if ((i == layer.currentWindow) or (!singleWindow and !currentWindowFullscreen)) 1 else 0,
+                        .NOACTIVATE = if ((i == layer.currentWindow) or (!singleWindow and !currentWindowFullscreen)) 0 else 1,
+                        .NOZORDER = if ((i == layer.currentWindow) or (!singleWindow and !currentWindowFullscreen)) 0 else 1,
+                    }),
+                );
+
                 if (hdwp == 0) {
                     return;
                 }
-
-                var currentWindowFullscreen = false;
-                if (self.getCurrentWindow()) |window| {
-                    currentWindowFullscreen = windowHasRect(window.hwnd, self.rect) catch false;
-                }
-
-                if (layer.windows.items.len == 1) {
-                    // Only one window and we don't want to use a gap
-                    const window = &layer.windows.items[0];
-
-                    if (maximizeFullSizeWindows) {
-                        window.rect = monitorArea;
-                        maximizeWindowOnMonitor(window.hwnd, self.hmonitor) catch {};
-                    } else {
-                        // Unmaximize the window.
-                        if (isWindowMaximized(window.hwnd) catch false) {
-                            std.log.debug("Restoring window because it is maximized: {}", .{window.hwnd});
-                            _ = ShowWindow(window.hwnd, SW_RESTORE);
-                        }
-
-                        if (noGapForSingleWindow) {
-                            window.rect = monitorArea;
-                        } else {
-                            window.rect = area;
-                        }
-
-                        const visualRect = getRectWithoutBorder(window.hwnd, window.rect);
-                        setWindowRect(window.hwnd, visualRect, .{}) catch {
-                            std.log.err("Failed to set window position of {}", .{window.hwnd});
-                        };
-                    }
-                } else {
-                    var x: i32 = area.left;
-                    for (layer.windows.items) |*window, i| {
-                        if (windowHasRect(window.hwnd, self.rect) catch false) {
-                            // Window is true fullscreen, don't mess with it.
-                            window.rect = self.rect;
-                            continue;
-                        }
-
-                        if (isWindowMaximized(window.hwnd) catch false) {
-                            std.log.debug("Restoring window because it is maximized: {}", .{window.hwnd});
-                            _ = ShowWindow(window.hwnd, SW_RESTORE);
-                        }
-
-                        var windowArea = area;
-                        if (i + 1 < layer.windows.items.len) {
-                            // More windows after this one.
-                            const horizontalOrVertical = if (root.ONLY_USE_HALF_MONITOR) 1 else 0;
-                            if (@mod(i, 2) == horizontalOrVertical) {
-                                const ratio = if (i == 0) splitRatio else 0.5;
-                                const split = @floatToInt(i32, @intToFloat(f64, windowArea.right - windowArea.left) * ratio);
-
-                                area.left += split + gap;
-                                windowArea.right = windowArea.left + split;
-                            } else {
-                                const ratio = if (i == 0) splitRatio else 0.5;
-                                const split = @floatToInt(i32, @intToFloat(f64, windowArea.bottom - windowArea.top) * ratio);
-
-                                area.top += split + gap;
-                                windowArea.bottom = windowArea.top + split;
-                            }
-                        }
-
-                        window.rect = windowArea;
-
-                        const visualRect = getRectWithoutBorder(window.hwnd, window.rect);
-                        hdwp = DeferWindowPos(
-                            hdwp,
-                            window.hwnd,
-                            null,
-                            visualRect.left,
-                            visualRect.top,
-                            visualRect.right - visualRect.left,
-                            visualRect.bottom - visualRect.top,
-                            SET_WINDOW_POS_FLAGS.initFlags(.{
-                                .NOOWNERZORDER = 1,
-                                .SHOWWINDOW = if (!currentWindowFullscreen) 1 else 0,
-                                .NOACTIVATE = if (currentWindowFullscreen) 1 else 0,
-                                .NOZORDER = if (currentWindowFullscreen) 1 else 0,
-                            }),
-                        );
-
-                        if (hdwp == 0) {
-                            return;
-                        }
-                    }
-
-                    _ = EndDeferWindowPos(hdwp);
-                }
             }
 
-            for (layer.windows.items) |*window| {
-                _ = InvalidateRect(window.hwnd, null, 1);
-            }
+            _ = EndDeferWindowPos(hdwp);
+        }
+
+        for (layer.windows.items) |*window| {
+            _ = InvalidateRect(window.hwnd, null, 1);
         }
 
         if (root.LOG_LAYERS) {
@@ -509,7 +456,7 @@ pub const Monitor = struct {
                 for (layer.windows.items) |*window, windowIndex| {
                     const winRect = if (convertToClient) screenToClient(self.overlayWindow, window.rect) else window.rect;
 
-                    if (windowIndex == self.currentWindow) {
+                    if (windowIndex == layer.currentWindow) {
                         var brush = brushUnfocused;
                         var thickness = config.windowUnfocusedBorder.thickness;
 
@@ -562,13 +509,14 @@ pub const Monitor = struct {
         var fromLayer = self.getCurrentLayer();
         var toLayer = self.getLayer(@intCast(usize, newLayer));
 
-        if (fromLayer.getWindowAt(self.currentWindow)) |window| {
+        if (fromLayer.getWindowAt(fromLayer.currentWindow)) |window| {
             toLayer.addWindow(window.hwnd, null) catch unreachable;
             _ = fromLayer.removeWindow(window.hwnd);
             setWindowVisibility(window.hwnd, false);
         }
 
-        self.clampCurrentWindowIndex();
+        fromLayer.clampCurrentWindowIndex();
+        toLayer.clampCurrentWindowIndex();
         self.focusCurrentWindow();
         self.layoutWindows();
         self.rerenderOverlay();
@@ -586,7 +534,7 @@ pub const Monitor = struct {
         var layer = self.getCurrentLayer();
         var toLayer = self.getLayer(dstIndex);
 
-        if (layer.getWindowAt(self.currentWindow)) |window| {
+        if (layer.getWindowAt(layer.currentWindow)) |window| {
             if (toLayer.containsWindow(window.hwnd)) {
                 _ = toLayer.removeWindow(window.hwnd);
             } else {
@@ -595,7 +543,7 @@ pub const Monitor = struct {
         }
     }
 
-    pub fn switchLayer(self: *Self, dstIndex: usize, partOfBatch: bool) void {
+    pub fn switchLayer(self: *Self, dstIndex: usize, windowsToHide: *std.ArrayList(*Window)) void {
         const newLayer = dstIndex;
         if (newLayer == self.currentLayer) return;
 
@@ -613,23 +561,11 @@ pub const Monitor = struct {
         }
 
         self.currentLayer = dstIndex;
-        self.currentWindow = 0;
-
-        if (!partOfBatch) {
-            self.focusCurrentWindow();
-            self.layoutWindows();
-            self.rerenderOverlay();
-
-            // Just for aesthetics, so the above windows will be show before
-            // the other windows get hidden, which prevents a short flicker.
-            // @todo: is there a better way to do this?
-            Sleep(30);
-        }
 
         // Hide windows in the current layer except ones that are also on the target layer.
         for (fromLayer.windows.items) |*window| {
             if (!toLayer.containsWindow(window.hwnd)) {
-                setWindowVisibility(window.hwnd, false);
+                windowsToHide.append(window) catch {};
             }
         }
     }

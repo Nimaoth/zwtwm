@@ -45,7 +45,9 @@
         "Main HighGUI class",
         "WindowsForms10.Window.8.app.0.3e799b_r6_ad1",
         "TSC_POPUP_PARENT_WNDCLASS",
-        "BBarWindowClass"
+        "BBarWindowClass",
+        "TmForever",
+        "#32770"
     ],
 
     "ignoredTitles": [
